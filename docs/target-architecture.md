@@ -60,6 +60,8 @@ devops-terraform-jenkins-eks/
 
 在 `terraform-aws-modules/eks/aws` 外面包一层,使用一个当前受支持、锁定版本的 Kubernetes 版本,同时锁定匹配的 `required_providers { aws = { version = ... } }` 约束——这不是纸上谈兵:`part2` 现在未锁版本的 `~>19.0` 模块,今天用当前的 AWS provider 就已经跑不过 `terraform validate`(`docs/current-state-assessment.md` §8a)。锁定版本、当前受支持的 Kubernetes 版本(现有的 `1.24` 已经过了标准支持期,必须升级),用变量限制 `cluster_endpoint_public_access_cidrs`,默认启用 IRSA/OIDC,开启控制面日志,节点组 `capacity_type` 可选(lab 默认 `SPOT`)。更高级的能力(Karpenter、PDB、多 AZ 节点绑定)按需求文档 §8.3 明确推迟到后面再做。
 
+**实现前置条件:** 在写任何 `modules/eks` 代码之前,必须先在独立 PR 中完成四份设计文档——`docs/eks-capacity-plan.md`、`docs/eks-node-group-design.md`、`docs/eks-scheduling-standard.md`、`docs/eks-storage-design.md`(目前都只是占位文档)。这四份文档定下节点组集合(`system-on-demand`/`stateless-on-demand`/`stateless-spot`/`stateful-on-demand`/`batch-spot`,以及 Production 是否需要按 AZ 拆分 stateful 节点组)、HPA/VPA/Karpenter 的职责边界、Deployment 与 StatefulSet 的 labels/taints/tolerations 隔离方案,以及存储标准(PVC 默认 `gp3`、Production 关键数据 `Retain`、EBS `WaitForFirstConsumer`、启用 EBS CSI/Volume Expansion/加密、StatefulSet 禁止跑 Spot)。详见 `docs/migration-plan.md` 阶段 4a。
+
 ## 8. CI/CD
 
 `terraform-check.yml`(本次 PR 已加入):`fmt -check -recursive`、`init -backend=false`、`validate`,每个 PR 都跑,不需要 AWS 凭证。`lab-plan`/`lab-apply`/`lab-destroy` 和 `prod-plan` 工作流推迟到模块拆分阶段,等 `environments/lab` 有真实内容可以 plan 了再建——现在建这些针对空壳目录的 workflow,只会是一个永远失败的 workflow。
