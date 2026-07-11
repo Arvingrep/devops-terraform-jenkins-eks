@@ -1,2 +1,27 @@
 .DS_Store
-.terraform*
+
+# Terraform local working state — never commit these
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Do NOT ignore .terraform.lock.hcl — it must be committed for reproducible provider versions
+
+# Real env-specific variable files — commit only the .tfvars.example templates
+environments/**/terraform.tfvars
+environments/**/*.auto.tfvars
+!environments/**/*.tfvars.example
+
+# Local backend config generated from backend.hcl.example
+environments/**/backend.hcl
+
+# Editors / OS
+.vscode/
+.idea/
