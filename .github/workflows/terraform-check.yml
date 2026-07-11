@@ -5,17 +5,23 @@ name: Terraform Check
 # lab-plan/lab-apply/lab-destroy/prod-plan workflows are added once
 # environments/* have real module calls (docs/migration-plan.md).
 #
-# Known pre-existing debt in part1-jenkins-from-terraform and
-# part2-cluster-from-terraform-and-jenkins (see
-# docs/current-state-assessment.md §5 and §8a) means tflint's naming/doc
-# rules and tfsec findings, and part2's `terraform validate`, fail on that
-# legacy code today. Rather than hide that behind a narrower scan path
-# (which would defeat the point of scanning), those specific checks are
-# non-blocking (`continue-on-error` / `soft_fail: true`) until Migration
-# Plan Phase 3 (jenkins module) and Phase 4 (eks module) remediate them —
-# at which point they flip to hard-blocking. environments/lab,
-# environments/prod, and part1's `terraform validate` have no such excuse
-# and are hard-blocking from day one.
+# Legacy vs new IaC paths are checked, and gated, differently on purpose:
+#
+#   legacy (part1-jenkins-from-terraform/, part2-.../terraform-for-cluster/):
+#     pre-existing debt (docs/current-state-assessment.md §5, §8a) — tflint
+#     naming/doc rules, tfsec findings, and part2's `terraform validate`
+#     already fail there today, through no fault of any given PR. Those
+#     specific steps use step-level `continue-on-error` so they never block
+#     a merge, but every one of them still writes a clear pass/fail line to
+#     the job summary — a green check on a legacy-* job is NOT the same
+#     claim as "this Terraform is clean". See the ci-summary job below.
+#
+#   new (modules/, environments/, bootstrap/):
+#     zero excuse for debt — these paths are hard-blocking from the first
+#     line of code. tflint failures fail the workflow. tfsec CRITICAL/HIGH
+#     findings fail the workflow. terraform validate (once a path has real
+#     .tf content — currently only environments/lab and environments/prod)
+#     is hard-blocking.
 
 on:
   pull_request:
@@ -37,41 +43,46 @@ permissions:
 
 env:
   TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.15.8"
+  # Pinned to a specific release binary, not a mutable branch script —
+  # tfsec's own install script warns against unpinned curl-pipe-bash.
+  TFSEC_VERSION: "1.28.14"
 
 jobs:
+  # ---------------------------------------------------------------------
+  # Blocking: applies repo-wide, already passes, no legacy exception.
+  # ---------------------------------------------------------------------
   fmt:
-    name: terraform fmt
+    name: terraform fmt (blocking)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.15.8"
+          terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - run: terraform fmt -check -recursive -diff
 
-  validate:
-    name: terraform validate (${{ matrix.dir }})
+  # ---------------------------------------------------------------------
+  # Blocking: new IaC paths only.
+  # ---------------------------------------------------------------------
+  validate-new:
+    name: "terraform validate [new] (${{ matrix.dir }})"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         dir:
-          - part1-jenkins-from-terraform
-          - part2-cluster-from-terraform-and-jenkins/terraform-for-cluster
           - environments/lab
           - environments/prod
-    # part2 fails validate today with no code change in this PR — see
-    # docs/current-state-assessment.md §8a. Tracked to Migration Plan Phase 4.
-    continue-on-error: ${{ matrix.dir == 'part2-cluster-from-terraform-and-jenkins/terraform-for-cluster' }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: "1.15.8"
+          terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - name: terraform init (no backend)
@@ -82,15 +93,9 @@ jobs:
         working-directory: ${{ matrix.dir }}
         run: terraform validate
 
-  tflint:
-    name: tflint
+  tflint-new:
+    name: tflint [new] (blocking)
     runs-on: ubuntu-latest
-    # Naming-convention/doc rules fail against the untouched legacy code
-    # today (kebab-case resource names, undocumented variables in part1/
-    # part2). Non-blocking until Migration Plan Phase 3/4 rename/document
-    # those modules; new code under modules/ and environments/ should pass
-    # cleanly already.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -102,19 +107,210 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - run: tflint --recursive
+      - name: tflint modules/
+        run: tflint --recursive --chdir=modules --config="$GITHUB_WORKSPACE/.tflint.hcl"
 
-  tfsec:
-    name: tfsec
+      - name: tflint environments/
+        run: tflint --recursive --chdir=environments --config="$GITHUB_WORKSPACE/.tflint.hcl"
+
+      - name: tflint bootstrap/
+        run: tflint --recursive --chdir=bootstrap --config="$GITHUB_WORKSPACE/.tflint.hcl"
+
+  tfsec-new:
+    name: tfsec [new] (blocking on CRITICAL/HIGH)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aquasecurity/tfsec-action@v1.0.3
+      - name: Install tfsec (pinned release binary)
+        run: |
+          curl -fsSL -o /usr/local/bin/tfsec \
+            https://github.com/aquasecurity/tfsec/releases/download/v${{ env.TFSEC_VERSION }}/tfsec-linux-amd64
+          chmod +x /usr/local/bin/tfsec
+          tfsec --version
+
+      - name: tfsec modules/ environments/ bootstrap/
+        run: |
+          status=0
+          for dir in modules environments bootstrap; do
+            echo "::group::tfsec $dir"
+            tfsec "$dir" --minimum-severity HIGH --no-color || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  # ---------------------------------------------------------------------
+  # Non-blocking: legacy paths only. Every step below still records a
+  # clear pass/fail line in the job summary — see the note at the top of
+  # this file. Do not read a green check on these jobs as "Terraform is
+  # clean"; read the summary.
+  # ---------------------------------------------------------------------
+  validate-legacy:
+    name: "terraform validate [legacy] (${{ matrix.dir }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - part1-jenkins-from-terraform
+          - part2-cluster-from-terraform-and-jenkins/terraform-for-cluster
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
         with:
-          # Known findings in part1/part2 (0.0.0.0/0 SSH/Jenkins ingress,
-          # unencrypted EBS, public EKS endpoint — see
-          # docs/current-state-assessment.md §5) are pre-existing and
-          # tracked to Migration Plan Phase 3/4, not introduced by this PR.
-          # Findings still surface in the Action's annotations either way.
-          soft_fail: true
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (no backend)
+        id: init
+        continue-on-error: true
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        id: validate
+        if: steps.init.outcome == 'success'
+        continue-on-error: true
+        working-directory: ${{ matrix.dir }}
+        run: terraform validate
+
+      - name: Record result
+        if: always()
+        run: |
+          {
+            echo "### [legacy, non-blocking] terraform validate — ${{ matrix.dir }}"
+            if [[ "${{ steps.init.outcome }}" == "success" && "${{ steps.validate.outcome }}" == "success" ]]; then
+              echo "✅ passed"
+            else
+              echo "❌ **FAILED** — known pre-existing issue, see \`docs/current-state-assessment.md\` §8a. Not introduced by this PR; does not block merge; tracked to Migration Plan Phase 4."
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tflint-legacy:
+    name: tflint [legacy] (non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: tflint part1
+        id: tflint_part1
+        continue-on-error: true
+        run: tflint --chdir=part1-jenkins-from-terraform --config="$GITHUB_WORKSPACE/.tflint.hcl"
+
+      - name: tflint part2
+        id: tflint_part2
+        continue-on-error: true
+        run: tflint --chdir=part2-cluster-from-terraform-and-jenkins/terraform-for-cluster --config="$GITHUB_WORKSPACE/.tflint.hcl"
+
+      - name: Record result
+        if: always()
+        run: |
+          {
+            echo "### [legacy, non-blocking] tflint"
+            for pair in "part1-jenkins-from-terraform:${{ steps.tflint_part1.outcome }}" "part2-cluster-from-terraform-and-jenkins/terraform-for-cluster:${{ steps.tflint_part2.outcome }}"; do
+              dir="${pair%%:*}"; outcome="${pair##*:}"
+              if [[ "$outcome" == "success" ]]; then
+                echo "✅ $dir passed"
+              else
+                echo "❌ $dir **FAILED** — naming-convention/documentation debt, see \`docs/current-state-assessment.md\`. Does not block merge; tracked to Migration Plan Phase 3/4."
+              fi
+            done
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tfsec-legacy:
+    name: tfsec [legacy] (non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tfsec (pinned release binary)
+        run: |
+          curl -fsSL -o /usr/local/bin/tfsec \
+            https://github.com/aquasecurity/tfsec/releases/download/v${{ env.TFSEC_VERSION }}/tfsec-linux-amd64
+          chmod +x /usr/local/bin/tfsec
+          tfsec --version
+
+      - name: tfsec part1
+        id: tfsec_part1
+        continue-on-error: true
+        run: tfsec part1-jenkins-from-terraform --no-color
+
+      - name: tfsec part2
+        id: tfsec_part2
+        continue-on-error: true
+        run: tfsec part2-cluster-from-terraform-and-jenkins/terraform-for-cluster --no-color
+
+      - name: Record result
+        if: always()
+        run: |
+          {
+            echo "### [legacy, non-blocking] tfsec"
+            for pair in "part1:${{ steps.tfsec_part1.outcome }}" "part2/terraform-for-cluster:${{ steps.tfsec_part2.outcome }}"; do
+              dir="${pair%%:*}"; outcome="${pair##*:}"
+              if [[ "$outcome" == "success" ]]; then
+                echo "✅ $dir passed"
+              else
+                echo "❌ $dir **FAILED** — see \`docs/current-state-assessment.md\` §5 for the exact findings (part1: 2 HIGH + 1 MEDIUM; part2: 9 CRITICAL + 3 MEDIUM, incl. public EKS endpoint and \`0.0.0.0/0\` SSH/Jenkins ingress). Does not block merge; tracked to Migration Plan Phase 3/4."
+              fi
+            done
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------
+  # Always runs last: makes the legacy/new split impossible to miss, and
+  # fails the workflow if any *blocking* job actually failed — so overall
+  # green really does mean "new IaC paths are clean", never "everything
+  # including legacy is clean".
+  # ---------------------------------------------------------------------
+  ci-summary:
+    name: CI summary
+    runs-on: ubuntu-latest
+    needs:
+      - fmt
+      - validate-new
+      - tflint-new
+      - tfsec-new
+      - validate-legacy
+      - tflint-legacy
+      - tfsec-legacy
+    if: always()
+    steps:
+      - name: Write summary banner
+        run: |
+          {
+            echo "## Terraform Check summary"
+            echo
+            echo "**Blocking (new IaC: modules/, environments/, bootstrap/):**"
+            echo "- fmt: \`${{ needs.fmt.result }}\`"
+            echo "- validate-new: \`${{ needs.validate-new.result }}\`"
+            echo "- tflint-new: \`${{ needs.tflint-new.result }}\`"
+            echo "- tfsec-new: \`${{ needs.tfsec-new.result }}\`"
+            echo
+            echo "**Non-blocking (legacy: part1-jenkins-from-terraform/, part2-.../terraform-for-cluster/) — see per-job summaries above for exact pass/fail per check:**"
+            echo "- validate-legacy: \`${{ needs.validate-legacy.result }}\`"
+            echo "- tflint-legacy: \`${{ needs.tflint-legacy.result }}\`"
+            echo "- tfsec-legacy: \`${{ needs.tfsec-legacy.result }}\`"
+            echo
+            echo "A green workflow means the **new** IaC paths are clean. It does **not** mean all Terraform in this repo passes — legacy debt is tracked in \`docs/current-state-assessment.md\` and \`docs/migration-plan.md\`, not hidden by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any blocking check failed
+        if: |
+          needs.fmt.result == 'failure' ||
+          needs.validate-new.result == 'failure' ||
+          needs.tflint-new.result == 'failure' ||
+          needs.tfsec-new.result == 'failure'
+        run: |
+          echo "A blocking (new IaC) check failed — see the jobs above." >&2
+          exit 1
