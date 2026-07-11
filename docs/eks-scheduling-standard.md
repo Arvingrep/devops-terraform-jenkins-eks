@@ -2,7 +2,9 @@
 
 **状态:** 设计已完成,待业务确认具体工作负载数据后再进入 `modules/eks` 实现(阶段 4b)。本文档只做设计,不产生任何 Terraform 代码或 AWS 资源。
 
-节点池集合与容量计算见 `docs/eks-capacity-plan.md`;节点池的 labels/taints/tolerations 具体取值见 `docs/eks-node-group-design.md`。本文档定义 Pod 层面(HPA/VPA)与节点层面(Karpenter/Cluster Autoscaler)之间的职责边界,以及四条结构性禁止项的落地方式。
+节点池集合与容量计算见 `docs/eks-capacity-plan.md`;节点池的 labels/taints/tolerations 具体取值、架构(arm64/amd64)调度示例见 `docs/eks-node-group-design.md`。本文档定义 Pod 层面(HPA/VPA)与节点层面(Karpenter/Managed Node Group)之间的职责边界,以及四条结构性禁止项的落地方式。
+
+> **本轮修订说明:** Karpenter 管理的节点池不再有 `min/desired/max` 语义(见 `docs/eks-capacity-plan.md` §3.4/§4),下面 §1 的表述已同步更新。`stateful-*` 默认关闭(`enable_stateful_node_groups=false`),具体形态见 capacity-plan §2 的方案 A/B/C/D。
 
 ---
 
@@ -12,7 +14,7 @@
 |---|---|---|---|
 | Pod 副本数量 | **HPA**(Horizontal Pod Autoscaler) | 根据 CPU/内存/自定义指标动态调整 Deployment/StatefulSet 的副本数 | 不调整单个 Pod 的资源 request/limit,不管节点数量 |
 | Pod 资源请求(第一阶段) | **VPA**(Vertical Pod Autoscaler),`updateMode: "Off"` | 只生成 CPU/内存 request 的推荐值,写入 `VerticalPodAutoscalerCheckpoint`,供人工审阅 | **不自动重启 Pod、不自动修改 request/limit**——Phase 1 严禁 `Auto`/`Initial`/`Recreate` 模式 |
-| 节点数量 | **Karpenter**(`stateless-on-demand`/`stateless-spot`/`batch-spot`)或 **Managed Node Group ASG**(`system-on-demand`/`stateful-*`) | 根据 Pending Pod 反应式扩容节点、按 consolidation 策略缩容;Managed Node Group 按 min/desired/max 静态维持基线 | 不管 Pod 副本数量,不管 Pod 内部资源 request 取值 |
+| 节点数量 | **Karpenter**(`stateless-on-demand`/`stateless-spot`/`batch-spot`)或 **Managed Node Group ASG**(`system-on-demand`,若启用的 `stateful-*`) | Karpenter:根据 Pending Pod 反应式扩容节点、按 `consolidation_policy` 缩容,受 `cpu_limit`/`memory_limit` 约束,没有 min 语义;Managed Node Group:按 `min_size`/`desired_size`/`max_size` 静态维持基线 | 不管 Pod 副本数量,不管 Pod 内部资源 request 取值。Karpenter 池子"总有一点基线容量"这件事,由 Deployment `minReplicas`+`PodDisruptionBudget`+`PriorityClass` 在 Pod 层面保证,不是节点层面的职责(详见 `docs/eks-capacity-plan.md` §3.4) |
 
 **目标利用率 65%–70%**(与 `docs/eks-capacity-plan.md` 容量计算保持一致)是 HPA 扩容阈值与 Karpenter 触发新增节点之间共同的设计基准——HPA 让 Pod 数量匹配负载,Karpenter/ASG 让节点数量匹配 Pod 数量,两者独立运作、互不覆盖对方的职责。
 
@@ -31,7 +33,8 @@
   - `nodeSelector`(或 `nodeAffinity`)指向目标节点池的 `dedicated` label;
   - 与目标节点池 taint 匹配的 `tolerations`。
 - 不依赖任何隐式/默认调度行为——没有携带正确 nodeSelector+toleration 组合的 Pod,在所有节点池上都会因为 taint 而无法调度(`Pending` + 明确的调度失败事件),这是有意为之的"快速失败"设计,防止工作负载意外落到错误的节点池上,污染容量计算和成本归因。
-- 具体到 StatefulSet:必须使用 `stateful-on-demand`(Lab)或按可用区匹配 `stateful-az-a/b/c`(Prod)之一的 nodeSelector+toleration 组合,且**不允许**同时携带任何 `node-lifecycle=spot` 相关的 toleration(见下面禁止项 1 的强制手段)。
+- 具体到 StatefulSet:仅在 `enable_stateful_node_groups=true` 且已按 `docs/eks-capacity-plan.md` §2 选定方案(A/B/C 之一)之后才会被调度——必须使用对应方案的 nodeSelector+toleration 组合(方案 A/B 是 `stateful-on-demand` 或 `stateful-az-a/b/c`,方案 C 是待定的 Karpenter NodePool),且**不允许**同时携带任何 `node-lifecycle=spot` 相关的 toleration(见下面禁止项 1 的强制手段)。
+- 架构(arm64/amd64)是叠加在这套 taint/toleration 体系之上的另一个调度维度,不是替代——具体规则和 YAML 示例见 `docs/eks-node-group-design.md` §7。
 
 ---
 

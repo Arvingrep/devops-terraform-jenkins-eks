@@ -2,7 +2,9 @@
 
 **状态:** 设计已完成,待业务确认具体数据规模后再进入 `modules/eks` 实现(阶段 4b)。本文档只做设计,不产生任何 Terraform 代码或 AWS 资源。
 
-节点池集合与容量计算见 `docs/eks-capacity-plan.md`;哪些节点池承载 stateful 工作负载、taints/tolerations 见 `docs/eks-node-group-design.md`。
+节点池集合与容量计算见 `docs/eks-capacity-plan.md`;哪些节点池承载 stateful 工作负载、taints/tolerations 见 `docs/eks-node-group-design.md`。`stateful-*` 节点组默认关闭(`enable_stateful_node_groups=false`),本文档描述的 StorageClass/备份/销毁流程是**启用后**适用的设计,不代表现在就有任何 PVC 在跑。
+
+> **本轮修订说明:** (1)§6 destroy 流程改为强制的有序销毁步骤,orphan EBS 检查是验收项而不是可选建议,并且明确 `reclaimPolicy=Delete` 不能保证绝对无残留;(2)§4 备份改成"EBS 快照只是块级恢复点,不代表应用可恢复"的表述,并按 PostgreSQL/Elasticsearch/VictoriaMetrics/Kafka/Jenkins 分别给出备份方向(仅方向,不在本 PR 实现)。
 
 ---
 
@@ -66,18 +68,23 @@ parameters:
 
 ## 4. 备份
 
-### EBS Snapshot
+### EBS Snapshot 的定位:只是块级恢复点,不是备份策略本身
 
-Production 关键数据(`gp3-retain`/`gp3-performance` 卷)需要定期快照,建议通过 `VolumeSnapshotClass`(对接 EBS CSI driver 的快照能力)+ AWS Backup 或 Velero 实现按 Schedule 自动创建,并设置保留天数(占位建议:每日快照,保留 7–14 天,具体保留策略待业务确认合规/RPO 要求)。
+**EBS/CSI 快照是一个块级恢复点,不代表应用数据可恢复、也不代表满足了任何 RPO/RTO 目标。** 快照能保证的只是"某一时刻磁盘块的副本存在",不保证:文件系统/数据库内部结构在那一刻是一致的、恢复后应用能正常启动、恢复所需时间符合业务预期。**生产环境的真实恢复能力,必须由应用原生备份机制、定期的恢复演练(restore drill)、以及针对 RPO/RTO 目标的验证共同建立——只配置好 `VolumeSnapshotClass` 并不构成"已经有备份"。**
 
-### 应用一致性备份
+基础设施层面仍然需要:通过 `VolumeSnapshotClass`(对接 EBS CSI driver 的快照能力)+ AWS Backup 或 Velero 按 Schedule 自动创建快照,设置保留天数(占位建议:每日快照,保留 7–14 天,具体保留策略待业务确认合规/RPO 要求)。但这只是"应用原生备份"的补充/兜底,不是替代。
 
-EBS/CSI 快照本身只是**崩溃一致性**(crash-consistent)——相当于突然断电时刻的磁盘状态,对大多数现代数据库是安全的,但不保证"事务级"一致性,尤其是有独立 WAL/日志目录挂载在不同卷、或者应用层有内存缓冲未落盘的场景。对于 Production 数据库类工作负载,建议:
+### 分组件的备份方向(仅方向,具体实现留给对应组件上线时的独立设计,不在本 PR 实现)
 
-- 使用应用原生的一致性备份工具(如 `pg_basebackup`/逻辑 dump,而不是仅依赖块级快照);或
-- 如果依赖块级快照,备份前用 Velero 的 pre/post hook(或应用自身的 quiesce 机制)先让应用flush 缓冲区、短暂暂停写入,快照完成后再恢复写入,确保快照那一刻是应用一致的。
+| 组件 | 备份方向 |
+|---|---|
+| **PostgreSQL** | WAL 归档 + 基础备份(`pgBackRest`/`WAL-G`/`pg_basebackup`)支持时间点恢复(PITR);逻辑备份(`pg_dump`)作为便携、可跨版本恢复的补充;**必须定期做恢复演练**,验证从备份实际拉起一个可用实例所需时间是否满足 RTO。 |
+| **Elasticsearch** | 使用原生 Snapshot API(`_snapshot`,S3 repository 插件),按索引/分片增量快照——这是应用感知的一致性备份,**不要**对 Elasticsearch 数据节点直接做块级 EBS 快照当作主要备份手段。 |
+| **VictoriaMetrics** | 使用原生 `vmbackup`/`vmrestore` 工具对接对象存储(S3),理解 VictoriaMetrics 自身的存储格式、支持增量;EBS 快照可以作为最后手段但会丢失 vmbackup 的空间效率优势。VictoriaMetrics 没有 AWS 托管等价物(见 `docs/eks-capacity-plan.md` §2 方案 D),因此无论最终节点组选型如何,它的备份问题都需要独立解决。 |
+| **Kafka** | 数据持久性首先依赖 **副本因子 ≥3、跨可用区分布**的 broker 设计,这是主要的可靠性机制,不是"备份"。真正的备份/灾备需求用 MirrorMaker2 复制到独立的备用集群,或用 Kafka Connect S3 Sink Connector 做主题数据的持久归档;broker 卷的 EBS 快照只是最后兜底手段。 |
+| **Jenkins** | Jenkins Home(job 定义、插件、凭证库、配置)通过定期 tar/rsync 到 S3 的方式备份;更根本的方向是用 Configuration-as-Code(JCasC)把 Jenkins 配置声明化,使其本身可从代码重建而不完全依赖备份恢复。当前 Jenkins 跑在 EC2(`part1-jenkins-from-terraform`),备份需求同时记录在 `docs/current-state-assessment.md` 的既有差距里,不完全属于本 EKS 存储设计的范围;如果未来 Jenkins Agent/流水线组件迁移到 EKS,这里的方向同样适用。 |
 
-具体选哪种方式因数据库/中间件类型而异,留待真实 stateful 工作负载选型确定后再补充到本文档。
+以上均为方向性说明,具体备份工具选型、Schedule、恢复演练流程,留待每个组件真正确定要自建(而不是走 `docs/eks-capacity-plan.md` §2 方案 D 的托管服务)之后再补充到本文档或对应组件的独立设计里。
 
 ---
 
@@ -89,15 +96,30 @@ EBS/CSI 快照本身只是**崩溃一致性**(crash-consistent)——相当于�
 
 ---
 
-## 6. Destroy 后 Orphan EBS 检查
+## 6. 有序销毁与 Orphan EBS 检查(强制验收项)
 
-因为 `gp3-retain`/`gp3-performance` 的 reclaim policy 是 `Retain`,`terraform destroy`(或 `make lab-destroy`/`make prod-plan` 对应的销毁流程)**不会**删除这些卷背后的 EBS 资源——PV 被删除后,底层 EBS 卷会变成"未挂载但仍然存在"的孤儿资源,继续计费。
+**`reclaimPolicy=Delete` 不能保证 `terraform destroy` 之后绝对没有残留。** `Delete` 策略依赖 Kubernetes 的正常回收链路(PVC 删除 → PV 删除 → EBS CSI controller 收到 PV 删除事件 → 调用 AWS API 删除底层 EBS 卷)完整跑完;如果 `terraform destroy` 直接把 EKS 集群/节点组/VPC 一起拆掉,而不是先让 Kubernetes 完成对象级别的清理,CSI controller 可能根本来不及处理这个回收链路(它自己所在的节点已经被销毁、或者集群 API 已经不可达)——即使所有 StorageClass 都配置的是 `Delete`,同样可能产生孤儿 EBS 卷。`gp3-retain`/`gp3-performance` 的 `Retain` 策略则是**设计上就不会**被自动删除,这部分残留是预期行为,不是 bug,但同样需要被检查到、而不是被遗忘。
 
-要求:`scripts/infra.sh <env> destroy` 在执行 `terraform destroy` 之后,必须新增一步残留检查(目前 `scripts/infra.sh` 还是阶段 0/1 的占位骨架,真正接入这一步留给阶段 4b 或专门的销毁流程 PR,这里先把要求写清楚):
+### 强制的 Lab 销毁顺序
+
+`scripts/infra.sh lab destroy`(目前是阶段 0/1 的占位骨架,真正接入以下顺序留给阶段 4b 或专门的销毁流程 PR,这里先把顺序定下来)必须按以下顺序执行,不能跳步、不能把 K8s 层清理和 Terraform 层销毁揉在一起:
+
+1. **删除应用 / StatefulSet**(`kubectl delete` 对应的 Deployment/StatefulSet,或直接删除 namespace)。
+2. **删除 PVC**——触发 `Delete` 策略的 PV/EBS 回收链路开始执行。
+3. **等待 PV 和底层 EBS 卷实际删除完成**(轮询确认,不是发出删除请求就假定已完成——EBS 卷删除不是瞬时的)。
+4. **执行 orphan EBS 检查**(见下)——确认没有意外残留(`Retain` 卷会被检查到但预期存在,`Delete` 卷理论上此时应该已经不存在,如果还存在说明回收链路没跑完,需要在继续销毁前处理)。
+5. **删除 Node Group**(Managed Node Group / Karpenter NodePool)。
+6. **删除 EKS Cluster**。
+7. **删除网络**(VPC/子网等,`modules/network` 范畴)。
+
+这个顺序对 Prod 同样适用,只是第 4 步之后 Prod 默认不自动删除任何东西(见下)。
+
+### Orphan EBS 检查——销毁验收的强制项,不是可选建议
 
 1. 按集群名/`kubernetes.io/cluster/<name>` 标签或本仓库强制的 `Project`/`Environment` 标签(见 `docs/target-architecture.md` §5.3),列出状态为 `available`(未挂载)的 EBS 卷。
-2. **Lab:** 默认直接提示是否删除(Lab 不允许保留生产敏感数据,残留卷没有保留价值)。
-3. **Prod:** 只报告、不自动删除——残留可能是有意的数据保留,必须人工确认后再手动删除,并记录在销毁报告里(呼应 requirements §10.3"Destroy 后检查残留资源"、§9"Destroy 后执行残留检查")。
+2. **这一步是 Destroy 流程的强制验收项**——`scripts/infra.sh <env> destroy` 在完成上面 §6 的顺序之后,必须报告 orphan EBS 检查结果,销毁报告里没有这一项视为销毁流程不完整,不能视为"已销毁干净"。
+3. **Lab:** 检查后默认提示是否删除残留卷(Lab 不允许保留生产敏感数据,残留卷没有保留价值)。
+4. **Prod:** 只报告、不自动删除——残留可能是有意的数据保留(`Retain` 策略),也可能是回收链路未完成的真实问题,两种情况都需要人工判断,不能自动处理;检查结果必须记录在销毁报告里(呼应 requirements §10.3"Destroy 后检查残留资源"、§9"Destroy 后执行残留检查")。
 
 ---
 
@@ -113,6 +135,6 @@ EBS/CSI 快照本身只是**崩溃一致性**(crash-consistent)——相当于�
 
 - `gp3` 基线:约 $0.08/GB-月,基线 3000 IOPS / 125MB/s 免费。
 - `gp3-performance` 额外开销示例(在基线之上 +3000 IOPS、+125MB/s):IOPS 每单位约 $0.005/IOPS-月、吞吐每单位约 $0.04/(MB/s)-月 → 额外 IOPS 成本 ≈ 3000×$0.005=$15/月,额外吞吐成本 ≈ 125×$0.04=$5/月,一块性能盘比同容量基线盘每月多付约 $20(与容量费叠加,不含容量本身)。
-- Lab 存储成本估算(root volume,不含 PVC):`system`(20GiB)+`stateful`(50GiB)=70GiB × $0.08 ≈ **$5.6/月**。
-- Prod 存储成本估算(root volume,desired 配置,不含 PVC):`system` 3×20GiB + `stateless-on-demand` 2×20GiB + `stateless-spot` 2×20GiB + `stateful-az-*` 3×50GiB = 290GiB × $0.08 ≈ **$23.2/月**。
+- Lab 日常存储成本估算(root volume,`stateful-*` 关闭时,不含 PVC):仅 `system`(20GiB)× $0.08 ≈ **$1.6/月**。测试期间临时启用 `stateful-on-demand`(+50GiB)会额外增加 ≈$4/月,测试结束应随节点组一起关闭。
+- Prod 存储成本估算(root volume,desired 配置,不含 PVC,假设 `stateful-*` 已按方案 B 启用):`system` 3×20GiB + `stateless-on-demand` 2×20GiB + `stateless-spot` 2×20GiB + `stateful-az-*` 3×50GiB = 290GiB × $0.08 ≈ **$23.2/月**;`stateful-*` 未启用时对应减少 150GiB,约 **$11.2/月**。
 - PVC 本身的存储成本取决于 §3 的初始大小假设与真实数据量,待业务确认后单独核算,不包含在上述 root volume 估算内。
