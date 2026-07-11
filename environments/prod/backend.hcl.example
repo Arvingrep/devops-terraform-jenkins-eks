@@ -1,0 +1,20 @@
+# Illustrative only — ADR-0002 has not been confirmed yet.
+# Production MUST use a state target and IAM role fully independent from
+# lab/staging (own bucket key or own HCP Terraform workspace, applied only
+# via WCDTerraformProdApplyRole per requirements §7).
+#
+# --- Option A: self-managed S3 + DynamoDB (requirements §6.1) ---
+# bucket         = "wcd-infra-state"
+# key            = "prod/platform/terraform.tfstate"
+# region         = "us-east-1"
+# dynamodb_table = "wcd-infra-state-lock"
+# encrypt        = true
+#
+# --- Option B: HCP Terraform Cloud ---
+# In versions.tf:
+#   cloud {
+#     organization = "operationarvin"
+#     workspaces {
+#       name = "devops-terraform-jenkins-eks-prod" # dedicated workspace, not the lab one
+#     }
+#   }

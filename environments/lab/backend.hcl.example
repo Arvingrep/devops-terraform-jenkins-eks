@@ -1,0 +1,20 @@
+# Illustrative only — ADR-0002 has not been confirmed yet.
+# Copy to backend.hcl (gitignored) once a backend is chosen, and add the
+# matching empty `backend "s3" {}` / `cloud {}` block to versions.tf.
+#
+# --- Option A: self-managed S3 + DynamoDB (requirements §6.1) ---
+# bucket         = "wcd-infra-state"
+# key            = "lab/platform/terraform.tfstate"
+# region         = "us-east-1"
+# dynamodb_table = "wcd-infra-state-lock"
+# encrypt        = true
+#
+# --- Option B: HCP Terraform Cloud (already connected this session) ---
+# In versions.tf:
+#   cloud {
+#     organization = "operationarvin"
+#     workspaces {
+#       name = "devops-terraform-jenkins-eks" # or a dedicated "-lab" workspace
+#     }
+#   }
+# No backend.hcl needed for this option — `terraform login` handles auth.

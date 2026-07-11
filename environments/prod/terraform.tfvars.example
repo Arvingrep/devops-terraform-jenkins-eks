@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# terraform.tfvars itself must never be committed. Production values are
+# reviewed via PR + required approval, never applied ad hoc.
+
+aws_region  = "us-east-1"
+project     = "wcd-platform"
+environment = "prod"
+owner       = "wcd"
+cost_center = "production"

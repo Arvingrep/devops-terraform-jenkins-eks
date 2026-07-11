@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values.
+# terraform.tfvars itself must never be committed.
+
+aws_region  = "us-east-1"
+project     = "wcd-platform"
+environment = "lab"
+owner       = "wcd"
+cost_center = "lab"
