@@ -1,0 +1,120 @@
+name: Terraform Check
+
+# Lint-only: no AWS credentials, no state access, no apply/plan against real
+# infrastructure. This is the PR gate required by requirements §10.1.
+# lab-plan/lab-apply/lab-destroy/prod-plan workflows are added once
+# environments/* have real module calls (docs/migration-plan.md).
+#
+# Known pre-existing debt in part1-jenkins-from-terraform and
+# part2-cluster-from-terraform-and-jenkins (see
+# docs/current-state-assessment.md §5 and §8a) means tflint's naming/doc
+# rules and tfsec findings, and part2's `terraform validate`, fail on that
+# legacy code today. Rather than hide that behind a narrower scan path
+# (which would defeat the point of scanning), those specific checks are
+# non-blocking (`continue-on-error` / `soft_fail: true`) until Migration
+# Plan Phase 3 (jenkins module) and Phase 4 (eks module) remediate them —
+# at which point they flip to hard-blocking. environments/lab,
+# environments/prod, and part1's `terraform validate` have no such excuse
+# and are hard-blocking from day one.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+      - "**/*.tfvars.example"
+      - ".tflint.hcl"
+      - ".terraform-version"
+      - ".github/workflows/terraform-check.yml"
+  push:
+    branches:
+      - lab
+    paths:
+      - "**/*.tf"
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: terraform validate (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - part1-jenkins-from-terraform
+          - part2-cluster-from-terraform-and-jenkins/terraform-for-cluster
+          - environments/lab
+          - environments/prod
+    # part2 fails validate today with no code change in this PR — see
+    # docs/current-state-assessment.md §8a. Tracked to Migration Plan Phase 4.
+    continue-on-error: ${{ matrix.dir == 'part2-cluster-from-terraform-and-jenkins/terraform-for-cluster' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: terraform init (no backend)
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    # Naming-convention/doc rules fail against the untouched legacy code
+    # today (kebab-case resource names, undocumented variables in part1/
+    # part2). Non-blocking until Migration Plan Phase 3/4 rename/document
+    # those modules; new code under modules/ and environments/ should pass
+    # cleanly already.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - run: tflint --recursive
+
+  tfsec:
+    name: tfsec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          # Known findings in part1/part2 (0.0.0.0/0 SSH/Jenkins ingress,
+          # unencrypted EBS, public EKS endpoint — see
+          # docs/current-state-assessment.md §5) are pre-existing and
+          # tracked to Migration Plan Phase 3/4, not introduced by this PR.
+          # Findings still surface in the Action's annotations either way.
+          soft_fail: true
