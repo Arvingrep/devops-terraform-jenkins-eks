@@ -1,15 +1,15 @@
-# ADR-0003: GitHub → AWS Authentication
+# ADR-0003:GitHub → AWS 认证方式
 
-**Status:** Proposed — not yet implemented
+**状态:** 待定(Proposed)——尚未实现
 
-## Context
+## 背景
 
-`Jenkinsfile` currently injects long-lived `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` as Jenkins credentials to run Terraform. The requirements (§7) call for GitHub Actions to use OIDC federation to per-environment IAM roles (`WCDTerraformLabRole`, `WCDTerraformProdPlanRole`, `WCDTerraformProdApplyRole`) instead of static keys, for any CI/CD path that ends up living in GitHub Actions rather than Jenkins.
+`Jenkinsfile` 目前把长期有效的 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` 作为 Jenkins credentials 注入进去,用来跑 Terraform。需求文档(§7)要求:凡是最终落在 GitHub Actions 里的 CI/CD 路径,都应该用 OIDC 联合登录到按环境划分的 IAM 角色(`WCDTerraformLabRole`、`WCDTerraformProdPlanRole`、`WCDTerraformProdApplyRole`),而不是静态密钥。
 
-## Decision
+## 决策
 
-Not yet implemented — `.github/workflows/terraform-check.yml` (this PR) needs no AWS credentials at all (`fmt`/`validate` only with `-backend=false`), so this ADR only becomes load-bearing starting at Phase 5 (`lab-plan`/`lab-apply`/`lab-destroy`/`prod-plan` workflows) or if the ADR-0002 backend decision resolves to HCP Terraform Cloud with GitHub Actions as the trigger. `bootstrap/github-oidc/` is scaffolded as a placeholder now so the target layout is visible, but contains no working Terraform yet.
+尚未实现——本次 PR 里的 `.github/workflows/terraform-check.yml` 完全不需要任何 AWS 凭证(只做 `fmt`/`validate`,而且 `-backend=false`),所以这份 ADR 要到阶段 5(`lab-plan`/`lab-apply`/`lab-destroy`/`prod-plan` 这些 workflow)才会真正起作用,或者如果 ADR-0002 的 backend 决策最终选了 HCP Terraform Cloud、并且用 GitHub Actions 作为触发方式,那也会提前用到。`bootstrap/github-oidc/` 现在只是先占个位置,让目标结构可见,里面还没有能跑的 Terraform 代码。
 
-## Open question
+## 待确认的问题
 
-Whether Jenkins (existing, being kept and hardened per `modules/jenkins`) or GitHub Actions (net-new) is the system of record for running `plan`/`apply` going forward — or both, for different environments. This affects whether OIDC-to-AWS is even the right mechanism for Jenkins specifically (Jenkins would more likely use an EC2 instance profile than OIDC). Needs a decision before Phase 5.
+以后 `plan`/`apply` 到底以 Jenkins(现有的,会被保留并加固,见 `modules/jenkins`)为主,还是以 GitHub Actions(全新)为主——或者不同环境用不同的系统。这会影响"OIDC 到 AWS"这套机制对 Jenkins 是否真的适用(Jenkins 更可能用 EC2 instance profile,而不是 OIDC)。这个问题需要在阶段 5 之前决定。
