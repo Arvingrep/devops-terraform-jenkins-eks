@@ -1,5 +1,9 @@
 locals {
   name_prefix = "${var.project}-${var.environment}"
+  # Computed here (not read from module.eks) so modules/network never
+  # depends on modules/eks — module.network must come first in the graph
+  # since module.eks consumes its vpc_id/subnet_ids outputs.
+  eks_cluster_name = "${local.name_prefix}-eks"
 }
 
 module "network" {
@@ -13,12 +17,20 @@ module "network" {
   enable_nat_gateway   = true
   single_nat_gateway   = true # Lab: cost-optimized, see docs/target-architecture.md §4
   enable_vpc_flow_logs = var.enable_vpc_flow_logs
+
+  # Lets the EKS control plane and any future in-cluster subnet-discovery
+  # consumer (AWS Load Balancer Controller, Karpenter — neither installed
+  # in this phase) find these subnets, without modules/network needing to
+  # know the cluster name itself (Plan-1001 Phase 1 review finding).
+  additional_subnet_tags = {
+    "kubernetes.io/cluster/${local.eks_cluster_name}" = "shared"
+  }
 }
 
 module "eks" {
   source = "../../modules/eks"
 
-  cluster_name       = "${local.name_prefix}-eks"
+  cluster_name       = local.eks_cluster_name
   cluster_version    = var.eks_cluster_version
   vpc_id             = module.network.vpc_id
   private_subnet_ids = module.network.private_subnet_ids
