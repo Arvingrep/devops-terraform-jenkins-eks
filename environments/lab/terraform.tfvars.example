@@ -14,3 +14,16 @@ availability_zones    = ["us-east-1a", "us-east-1b"]
 public_subnet_cidrs   = ["10.0.0.0/24", "10.0.1.0/24"]
 private_subnet_cidrs  = ["10.0.16.0/20", "10.0.32.0/20"]
 enable_vpc_flow_logs  = false
+
+# modules/eks — defaults below match variables.tf.
+eks_cluster_version = "1.35"
+
+# Off by default (secure default — see modules/eks/README.md). To reach the
+# cluster API from outside the VPC (e.g. running the smoke tests from your
+# laptop, since no bastion/VPN exists yet), uncomment and set your own
+# IP/CIDR below. Never use 0.0.0.0/0.
+# eks_public_access_enabled = true
+# eks_public_access_cidrs   = ["203.0.113.4/32"]
+
+# eks_system_node_group left at its default (m7g.large / arm64 / 1-1-2) —
+# override here only if this account/region can't satisfy that.
