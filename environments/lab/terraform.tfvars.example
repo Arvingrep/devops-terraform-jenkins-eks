@@ -6,3 +6,11 @@ project     = "wcd-platform"
 environment = "lab"
 owner       = "wcd"
 cost_center = "lab"
+
+# modules/network — defaults below match variables.tf; override only if
+# this AWS account/region needs different CIDRs or AZs.
+vpc_cidr_block        = "10.0.0.0/16"
+availability_zones    = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs   = ["10.0.0.0/24", "10.0.1.0/24"]
+private_subnet_cidrs  = ["10.0.16.0/20", "10.0.32.0/20"]
+enable_vpc_flow_logs  = false
