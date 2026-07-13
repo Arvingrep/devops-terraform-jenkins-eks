@@ -179,10 +179,18 @@ data "aws_iam_policy_document" "lab_permissions" {
     # under resource_name_prefix, so this role can't modify its own
     # trust policy or permissions). The trailing "-*" is a name-prefix
     # match, not an open wildcard — tfsec flags any "*" character.
+    #
+    # "system-eks-node-group-*" is a second, distinct pattern: found via
+    # a real apply attempt (Plan: Recover Tainted VPC, node-group role
+    # creation AccessDenied). The upstream terraform-aws-modules/eks/aws
+    # managed-node-group submodule names its own IAM role from the node
+    # group's map key ("system", modules/eks's only current node group)
+    # rather than resource_name_prefix, so it needs its own entry here.
     # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = [
       "arn:aws:iam::*:role/${var.resource_name_prefix}-*",
       "arn:aws:iam::*:instance-profile/${var.resource_name_prefix}-*",
+      "arn:aws:iam::*:role/system-eks-node-group-*",
     ]
   }
 

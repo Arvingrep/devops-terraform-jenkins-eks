@@ -143,6 +143,18 @@ Cause: the AWS provider's `aws_vpc` resource, after calling `ec2:ModifyVpcAttrib
 
 Fix: added `ec2:DescribeVpcAttribute` to the existing `EC2Networking` statement's action list (same statement, same `resources=["*"]` justification as before — no new statement needed).
 
+## Plan-1010: node-group IAM role uses a different naming pattern than expected
+
+After the VPC's taint was resolved and a human re-ran the real apply, it progressed much further (VPC, subnets, cluster IAM role, cluster itself creating) before erroring on a different resource:
+
+```
+module.eks.module.eks.module.eks_managed_node_group["system"].aws_iam_role.this[0]: Creation errored after 0s
+```
+
+The plan showed why: this role's `name_prefix` is `"system-eks-node-group-"`, not `"${resource_name_prefix}-*"`. The upstream `terraform-aws-modules/eks/aws` managed-node-group submodule names its own IAM role from the node group's map key (`"system"` — `modules/eks`'s only node group today) rather than accepting our `resource_name_prefix`. `IAMRoleManagementScoped`'s existing resources list only covered `${resource_name_prefix}-*`, so this distinctly-named role fell outside it — same class of issue as Plan-1006/1007, a different naming convention the calling module doesn't control.
+
+Fix: added `arn:aws:iam::*:role/system-eks-node-group-*` as a third entry in `IAMRoleManagementScoped`'s resources list — same statement, same actions, no new statement. Scoped to the literal, currently-only node-group name; if `modules/eks` ever adds a second node group with a different key, that key's role name would need its own entry here too (not preemptively added, per "only what's currently needed").
+
 ## Recovery
 
 If the role or OIDC provider is accidentally deleted while `environments/lab` has real resources, nothing in AWS itself is affected (IAM changes don't touch EC2/EKS/etc. resources directly) — but HCP Terraform loses its ability to plan/apply/destroy those resources until the role is recreated and `TFC_AWS_RUN_ROLE_ARN` is updated again. Recreating this module's resources (same names, same trust policy) restores access without needing to touch the Lab resources themselves.
