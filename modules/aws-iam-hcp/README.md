@@ -155,6 +155,20 @@ The plan showed why: this role's `name_prefix` is `"system-eks-node-group-"`, no
 
 Fix: added `arn:aws:iam::*:role/system-eks-node-group-*` as a third entry in `IAMRoleManagementScoped`'s resources list — same statement, same actions, no new statement. Scoped to the literal, currently-only node-group name; if `modules/eks` ever adds a second node group with a different key, that key's role name would need its own entry here too (not preemptively added, per "only what's currently needed").
 
+## Plan-1011: creating the node group itself needed iam:PassRole on the same role
+
+After the Plan-1010 fix merged and a human re-ran the apply, it got one resource further — the node-group IAM role and its 3 policy attachments were created successfully — then errored creating the node group itself:
+
+```
+Error: creating EKS Node Group: AccessDeniedException
+Action:   iam:PassRole
+Resource: arn:aws:iam::<AWS_ACCOUNT_ID>:role/system-eks-node-group-*
+```
+
+Cause: `aws_eks_node_group` passes the node role to `eks.amazonaws.com` so EKS can use it — the same `iam:PassRole` requirement the cluster role already needed (`IAMPassRoleScoped`), just for the node-group role's distinct naming pattern, which wasn't in that statement's resources list yet.
+
+Fix: added `arn:aws:iam::*:role/system-eks-node-group-*` to `IAMPassRoleScoped`'s resources list — same statement, same `iam:PassedToService` condition, no new statement.
+
 ## Recovery
 
 If the role or OIDC provider is accidentally deleted while `environments/lab` has real resources, nothing in AWS itself is affected (IAM changes don't touch EC2/EKS/etc. resources directly) — but HCP Terraform loses its ability to plan/apply/destroy those resources until the role is recreated and `TFC_AWS_RUN_ROLE_ARN` is updated again. Recreating this module's resources (same names, same trust policy) restores access without needing to touch the Lab resources themselves.

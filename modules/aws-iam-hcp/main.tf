@@ -200,9 +200,15 @@ data "aws_iam_policy_document" "lab_permissions" {
     actions = ["iam:PassRole"]
     # Scoped to this project's own role name-prefix, plus the
     # iam:PassedToService condition below limits which AWS services can
-    # ever be handed one of those roles.
+    # ever be handed one of those roles. Also covers the node-group
+    # role's distinct naming pattern (see IAMRoleManagementScoped above)
+    # — creating the managed node group requires passing that role to
+    # eks.amazonaws.com.
     # tfsec:ignore:aws-iam-no-policy-wildcards
-    resources = ["arn:aws:iam::*:role/${var.resource_name_prefix}-*"]
+    resources = [
+      "arn:aws:iam::*:role/${var.resource_name_prefix}-*",
+      "arn:aws:iam::*:role/system-eks-node-group-*",
+    ]
 
     condition {
       test     = "StringEquals"
