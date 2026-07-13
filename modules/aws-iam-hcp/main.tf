@@ -205,6 +205,13 @@ data "aws_iam_policy_document" "lab_permissions" {
     # role's distinct naming pattern (see IAMRoleManagementScoped above)
     # — creating the managed node group requires passing that role to
     # eks.amazonaws.com.
+    #
+    # pods.eks.amazonaws.com added: EKS CreateAddon with a
+    # podIdentityAssociations block (aws-ebs-csi-driver's Pod Identity
+    # role) calls iam:PassRole with this service principal — different
+    # from the node-group service, found via a real apply AccessDenied
+    # (run run-hXY6VWY5g6QUPhN5). Read-only of what gets passed where:
+    # the role still cannot be used except by the Pod Identity service.
     # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = [
       "arn:aws:iam::*:role/${var.resource_name_prefix}-*",
@@ -214,7 +221,7 @@ data "aws_iam_policy_document" "lab_permissions" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com"]
+      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com"]
     }
   }
 
