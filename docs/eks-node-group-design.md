@@ -181,7 +181,7 @@ Graviton(arm64)是成本优先的默认选择,但**"写 x86 备选"不等于"有
 
 ### 7.1 规则
 
-1. 每个节点池(Managed Node Group 或 Karpenter NodePool)必须声明 `architecture = arm64 | amd64`,作为它的 `kubernetes.io/arch` label(Managed Node Group)或 `requirements`(Karpenter NodePool)的强制约束——不允许一个池子里混杂两种架构的节点(避免 Pod 因为没有架构亲和配置而被调度到不兼容的架构上导致 `exec format error`)。
+1. 每个节点池(Managed Node Group 或 Karpenter NodePool)必须声明 `architecture = arm64 | amd64`,作为调度约束的依据——Managed Node Group 依赖 kubelet 在每个节点上自动设置的 `kubernetes.io/arch` label(EKS `CreateNodegroup` API 拒绝显式传入任何 `kubernetes.io/`、`k8s.io/`、`eks.amazonaws.com/` 前缀的 label,这一点由一次真实 apply 的 `InvalidParameterException` 确认,而非仅凭文档假设);Karpenter NodePool 走 `requirements` 字段——不允许一个池子里混杂两种架构的节点(避免 Pod 因为没有架构亲和配置而被调度到不兼容的架构上导致 `exec format error`)。
 2. **所有进入 arm64 节点池的镜像,必须确认支持 `linux/arm64`**——这是部署前置条件,不是"大概率没问题"。
 3. 不支持 ARM 的工作负载,必须显式调度到对应池子的 `-amd64` 变体(见 §7.2),不能靠"反正调度器会兜底"的隐式假设。
 4. **Jenkins、监控(VictoriaMetrics 等)、安全组件(tfsec/扫描类工具的容器化版本,若未来上 EKS)、中间件(Kafka/Redis 等)——每一项都需要单独确认其容器镜像是否有官方/可信的 arm64 构建,不能整体假设"都支持"或"都不支持"。**当前 Jenkins 运行在 EC2(`part1-jenkins-from-terraform`),不在本设计范围内;如果未来 Jenkins Agent 或流水线组件容器化并调度到 EKS,同样需要走这里的兼容性确认流程。
