@@ -9,5 +9,6 @@ output "oidc_provider_arn" {
 }
 
 output "role_name" {
-  value = module.hcp_terraform_iam.role_name
+  value       = module.hcp_terraform_iam.role_name
+  description = "Name of the created IAM role, for reference in AWS console/CLI lookups."
 }
