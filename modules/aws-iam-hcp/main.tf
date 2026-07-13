@@ -101,6 +101,7 @@ data "aws_iam_policy_document" "lab_permissions" {
       "ec2:CreateTags", "ec2:DeleteTags", "ec2:DescribeTags",
       "ec2:DescribeAvailabilityZones", "ec2:DescribeAccountAttributes", "ec2:DescribeImages",
       "ec2:DescribeInstances", "ec2:DescribeInstanceTypes", "ec2:DescribeNetworkInterfaces", "ec2:DescribeVolumes",
+      "ec2:RunInstances",
     ]
     # EC2's API does not support resource-level ARN scoping for most of
     # these actions (create/describe operate account-wide) — this is a
