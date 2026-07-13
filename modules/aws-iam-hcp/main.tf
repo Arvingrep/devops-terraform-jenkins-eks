@@ -133,6 +133,20 @@ data "aws_iam_policy_document" "lab_permissions" {
     resources = ["*"]
   }
 
+  # Gap found via a real speculative plan on PR #6 (Plan-1008): the
+  # managed node group doesn't pin ami_release_version, so the upstream
+  # terraform-aws-modules/eks/aws module looks up the current
+  # recommended AMI via AWS's own public SSM parameter namespace
+  # (no account ID in the ARN — it's AWS-owned, not ours). Read-only,
+  # scoped to that one namespace, not all of SSM.
+  statement {
+    sid     = "EKSOptimizedAMILookup"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:ssm:*::parameter/aws/service/eks/optimized-ami/*"]
+  }
+
   statement {
     sid    = "AutoScalingForNodeGroups"
     effect = "Allow"

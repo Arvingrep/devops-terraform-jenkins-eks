@@ -111,7 +111,20 @@ Resource: arn:aws:iam::<AWS_ACCOUNT_ID>:role/terraform-lab-role
 
 Cause: `modules/eks` sets `enable_cluster_creator_admin_permissions = true`, which makes the upstream `terraform-aws-modules/eks/aws` module resolve the calling identity via the AWS provider's `aws_iam_session_context` data source — that data source calls `iam:GetRole` on the *assumed role's own name* to turn the STS session ARN back into a plain IAM role ARN for the EKS access entry it creates. This is `terraform-lab-role` reading its own metadata, not another role's.
 
-Fix: added a `SelfRoleLookup` statement, `iam:GetRole` scoped to `aws_iam_role.terraform_lab.arn` (a self-reference via Terraform's own resource address, not a hardcoded ARN — stays correct if `role_name` ever changes). Not yet re-verified against a real plan — that requires a human to re-apply this module (the policy change) and re-set `TFC_AWS_RUN_ROLE_ARN` if the role ARN itself changed (it won't — only the inline policy is being updated, not the role), then re-run PR #6's speculative plan.
+Fix: added a `SelfRoleLookup` statement, `iam:GetRole` scoped to `aws_iam_role.terraform_lab.arn` (a self-reference via Terraform's own resource address, not a hardcoded ARN — stays correct if `role_name` ever changes). Applied for real via `bootstrap/hcp-terraform-aws` (`0 added, 1 changed, 0 destroyed`, matching the diff exactly). A re-run speculative plan confirmed this specific error is gone — see Plan-1008 for what it hit next.
+
+## Plan-1008: second real speculative plan found one more gap
+
+Re-running PR #6's speculative plan after the Plan-1007 fix got substantially further (85 log lines vs. the earlier failure at line ~9) before hitting a second, different `AccessDenied`:
+
+```
+Action:   ssm:GetParameter
+Resource: arn:aws:ssm:us-east-1::parameter/aws/service/eks/optimized-ami/1.35/amazon-linux-2023/arm64/standard/recommended/release_version
+```
+
+Cause: `modules/eks`'s managed node group (`modules/eks/main.tf`) sets `ami_type = "AL2023_ARM_64_STANDARD"` without pinning `ami_release_version`, so the upstream `terraform-aws-modules/eks/aws` module looks up the current recommended AMI release via AWS's own public SSM parameter namespace (`arn:aws:ssm:*::parameter/...` — no account ID, it's AWS-owned, not ours).
+
+Fix: added an `EKSOptimizedAMILookup` statement, `ssm:GetParameter` (read-only) scoped to `arn:aws:ssm:*::parameter/aws/service/eks/optimized-ami/*` — not all of SSM, just AWS's own published EKS-AMI namespace. Applied and re-verified — see Validation above for the current pass/fail state.
 
 ## Recovery
 
