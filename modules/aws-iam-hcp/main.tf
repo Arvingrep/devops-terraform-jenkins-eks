@@ -322,13 +322,20 @@ data "aws_iam_policy_document" "lab_permissions" {
   # which doesn't support the iam:AWSServiceName condition key the statement
   # above relies on (GetRole never emits that context key), so it needs its
   # own statement rather than being folded into ServiceLinkedRoleCreation.
-  # Same resource scope, read-only.
+  #
+  # resources scoped to "arn:aws:iam::*:role/aws-service-role/*" was tried
+  # first and failed on a real retry with the identical error — confirmed
+  # via `aws iam get-role` that the role doesn't exist yet in this account,
+  # so EKS's existence-check can't resolve the scoped path/ARN before it
+  # knows whether the role (and therefore its path) exists. This is a
+  # documented AWS behavior for service-linked-role pre-checks, not unique
+  # to this setup. Read-only action, no other iam:Get*/List* granted here.
   statement {
     sid     = "ServiceLinkedRoleLookup"
     effect  = "Allow"
     actions = ["iam:GetRole"]
     # tfsec:ignore:aws-iam-no-policy-wildcards
-    resources = ["arn:aws:iam::*:role/aws-service-role/*"]
+    resources = ["*"]
   }
 
   statement {
