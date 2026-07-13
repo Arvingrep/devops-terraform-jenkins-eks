@@ -77,7 +77,28 @@ Destroying this role while `environments/lab` still has real applied resources w
 
 ## Validation
 
-`terraform fmt -check`, `tflint --recursive`, `tfsec --minimum-severity HIGH`: all clean (verified with Terraform 1.15.8, not just CI). `terraform validate`: **not run** — this module has no caller wiring it up yet (deliberately; see "How a human applies this"), and validating it standalone would require supplying real values for `hcp_workspace_name`/`resource_name_prefix`, which is a one-line `terraform validate` a human can run in seconds once they're ready to actually apply this. **Never applied** — no AWS credentials exist in the environment that wrote this module. The permissions policy is believed correct from reading the actual Terraform resource blocks in `modules/network`/`modules/eks`, but is genuinely unverified against a live apply.
+What was actually run, with Terraform 1.15.8 (not just fmt-level, and not just CI):
+
+- `terraform fmt -check -recursive`: clean.
+- `terraform init` (standalone, `-backend=false`, this module has no backend of its own — see `bootstrap/hcp-terraform-aws/` for the root that does): succeeded.
+- `terraform validate`: **succeeded** ("Success! The configuration is valid."). `validate` only checks internal structure/type-consistency, not that variables have real values, so this ran cleanly without needing `hcp_workspace_name`/`resource_name_prefix` set.
+- `tflint --recursive`: clean.
+- `tfsec --minimum-severity HIGH`: 0 findings (5 documented, justified ignores — see inline comments in `main.tf`).
+
+What has **not** been run, and can't be from this environment: `terraform plan`/`apply` — both need real AWS credentials to actually authenticate to AWS, which don't exist here. The permissions policy is reasoned from reading `modules/network`/`modules/eks`'s actual Terraform resource blocks (and reviewed again for gaps in Plan-1006 — see below), but is genuinely unverified against a live apply until that first real plan runs.
+
+## Plan-1006 permission review
+
+Re-checked the policy against `modules/network` + `modules/eks` for six specific gap categories:
+
+| Area | Finding | Action |
+|---|---|---|
+| IAM managed policy lifecycle | The upstream `terraform-aws-modules/eks/aws` module creates standalone managed policies (e.g. the cluster encryption policy) in addition to inline role policies. Missing entirely. | **Added** `IAMManagedPolicyLifecycleScoped` (scoped to `resource_name_prefix-*` policy ARNs) + `IAMReadAWSManagedPolicies` (read-only, needed to attach pre-existing AWS policies like `AmazonEBSCSIDriverPolicy`). |
+| EKS cluster OIDC provider lifecycle | `modules/eks` leaves `enable_irsa` at the upstream default (`true`), which creates the *cluster's own* OIDC provider (IRSA support) — a different provider from `app.terraform.io`. Missing entirely. | **Added** `EKSClusterOIDCProviderLifecycle`, scoped to the EKS OIDC issuer hostname pattern (`oidc.eks.*.amazonaws.com`), not `resource_name_prefix`. |
+| Service-linked role creation | First-time use of EKS/EKS-managed-node-groups/Auto-Scaling in an account auto-creates AWS service-linked roles. Missing entirely. | **Added** `ServiceLinkedRoleCreation`, scoped by `iam:AWSServiceName` condition to exactly `eks.amazonaws.com`/`eks-nodegroup.amazonaws.com`/`autoscaling.amazonaws.com`. |
+| KMS grants | Considered whether `kms:CreateGrant`/`RevokeGrant`/`ListGrants` are needed. `CreateGrant` is typically invoked by a *runtime* identity requesting temporary key access (e.g. the EBS CSI driver's own pod-identity role, dynamically provisioning volumes) — not by Terraform at apply time, which only creates the key/policy/alias. | **Not added** — no concrete Terraform-apply-time call site found; adding it speculatively would violate "only add clearly-needed permissions." Revisit if a real apply's `AccessDenied` proves otherwise. |
+| EKS access entries | Already present (`CreateAccessEntry` etc.) — needed because `authentication_mode="API"` + `enable_cluster_creator_admin_permissions=true` gives the applying identity its own access entry. | No change. |
+| EKS Pod Identity | Already present (`CreatePodIdentityAssociation` etc.). | No change. |
 
 ## Recovery
 

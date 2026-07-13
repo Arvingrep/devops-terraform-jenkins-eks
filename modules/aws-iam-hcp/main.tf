@@ -163,7 +163,9 @@ data "aws_iam_policy_document" "lab_permissions" {
     # role cannot touch IAM roles belonging to anything else in the
     # account, including terraform-lab-role's own definition (it isn't
     # under resource_name_prefix, so this role can't modify its own
-    # trust policy or permissions).
+    # trust policy or permissions). The trailing "-*" is a name-prefix
+    # match, not an open wildcard — tfsec flags any "*" character.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = [
       "arn:aws:iam::*:role/${var.resource_name_prefix}-*",
       "arn:aws:iam::*:instance-profile/${var.resource_name_prefix}-*",
@@ -171,15 +173,101 @@ data "aws_iam_policy_document" "lab_permissions" {
   }
 
   statement {
-    sid       = "IAMPassRoleScoped"
-    effect    = "Allow"
-    actions   = ["iam:PassRole"]
+    sid     = "IAMPassRoleScoped"
+    effect  = "Allow"
+    actions = ["iam:PassRole"]
+    # Scoped to this project's own role name-prefix, plus the
+    # iam:PassedToService condition below limits which AWS services can
+    # ever be handed one of those roles.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = ["arn:aws:iam::*:role/${var.resource_name_prefix}-*"]
 
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
       values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com"]
+    }
+  }
+
+  # Gap found in Plan-1006 review (Task 4): the upstream
+  # terraform-aws-modules/eks/aws module creates standalone managed
+  # policies (e.g. the cluster encryption policy, when
+  # attach_encryption_policy=true, the module default) in addition to
+  # the inline role policies already covered by IAMRoleManagementScoped
+  # above. Scoped to only policies this project creates.
+  statement {
+    sid    = "IAMManagedPolicyLifecycleScoped"
+    effect = "Allow"
+    actions = [
+      "iam:CreatePolicy", "iam:DeletePolicy", "iam:GetPolicy",
+      "iam:GetPolicyVersion", "iam:ListPolicyVersions", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
+      "iam:TagPolicy", "iam:UntagPolicy", "iam:ListEntitiesForPolicy",
+    ]
+    # Scoped to this project's own managed-policy name-prefix only.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:iam::*:policy/${var.resource_name_prefix}-*"]
+  }
+
+  # Separate, read-only statement: attaching an AWS-owned managed policy
+  # (e.g. AmazonEBSCSIDriverPolicy, via modules/eks's
+  # aws_iam_role_policy_attachment.ebs_csi) needs read access to that
+  # policy's own ARN, which lives under the AWS account "aws", not the
+  # caller's account — resource_name_prefix scoping doesn't apply here.
+  statement {
+    sid     = "IAMReadAWSManagedPolicies"
+    effect  = "Allow"
+    actions = ["iam:GetPolicy", "iam:GetPolicyVersion"]
+    # Already scoped to AWS's own "aws" pseudo-account specifically —
+    # the narrowest possible scope for "read AWS-owned public managed
+    # policies," which have no per-project name to further restrict by.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:iam::aws:policy/*"]
+  }
+
+  # Gap found in Plan-1006 review (Task 4): modules/eks leaves
+  # enable_irsa at the upstream module's default (true — see
+  # modules/eks/README.md "IAM: EKS Pod Identity, not IRSA"), which
+  # creates the *cluster's own* OIDC provider (IRSA support for
+  # anything that needs it later) — a completely different OIDC
+  # provider from the app.terraform.io one above. Scoped to the EKS
+  # OIDC issuer hostname pattern, not resource_name_prefix (the
+  # provider's own resource path is a domain name, not a role name).
+  statement {
+    sid    = "EKSClusterOIDCProviderLifecycle"
+    effect = "Allow"
+    actions = [
+      "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+      "iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviders",
+      "iam:TagOpenIDConnectProvider", "iam:UntagOpenIDConnectProvider",
+      "iam:UpdateOpenIDConnectProviderThumbprint",
+    ]
+    # Scoped to the EKS OIDC issuer hostname pattern specifically —
+    # about as narrow as this gets, since the provider's own path
+    # segment (the issuer ID) is opaque and only known after creation.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:iam::*:oidc-provider/oidc.eks.*.amazonaws.com/id/*"]
+  }
+
+  # Gap found in Plan-1006 review (Task 4): the first time EKS,
+  # EKS-managed-node-groups, or Auto Scaling are used in an AWS account,
+  # AWS auto-creates the corresponding service-linked role — the
+  # identity applying Terraform needs permission to trigger that
+  # creation. Scoped by iam:AWSServiceName, not resource_name_prefix
+  # (service-linked role paths are AWS-defined, not ours to name).
+  statement {
+    sid     = "ServiceLinkedRoleCreation"
+    effect  = "Allow"
+    actions = ["iam:CreateServiceLinkedRole"]
+    # Further restricted by the iam:AWSServiceName condition below —
+    # the resource pattern alone can't express "only these 3 services,"
+    # so the condition is where the real narrowing happens.
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:iam::*:role/aws-service-role/*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com"]
     }
   }
 
