@@ -85,7 +85,7 @@ What was actually run, with Terraform 1.15.8 (not just fmt-level, and not just C
 - `tflint --recursive`: clean.
 - `tfsec --minimum-severity HIGH`: 0 findings (5 documented, justified ignores — see inline comments in `main.tf`).
 
-What has **not** been run, and can't be from this environment: `terraform plan`/`apply` — both need real AWS credentials to actually authenticate to AWS, which don't exist here. The permissions policy is reasoned from reading `modules/network`/`modules/eks`'s actual Terraform resource blocks (and reviewed again for gaps in Plan-1006 — see below), but is genuinely unverified against a live apply until that first real plan runs.
+What has **not** been run from this environment: `terraform plan`/`apply` — both need real AWS credentials that don't exist here. A human has since applied this module for real (via `bootstrap/hcp-terraform-aws`) and a real speculative plan was run against PR #6 with the resulting role — see Plan-1007 below for the one permission gap that surfaced and its fix. The permissions policy is otherwise reasoned from reading `modules/network`/`modules/eks`'s actual Terraform resource blocks (and reviewed again for gaps in Plan-1006 — see below).
 
 ## Plan-1006 permission review
 
@@ -100,6 +100,19 @@ Re-checked the policy against `modules/network` + `modules/eks` for six specific
 | EKS access entries | Already present (`CreateAccessEntry` etc.) — needed because `authentication_mode="API"` + `enable_cluster_creator_admin_permissions=true` gives the applying identity its own access entry. | No change. |
 | EKS Pod Identity | Already present (`CreatePodIdentityAssociation` etc.). | No change. |
 
+## Plan-1007: real speculative plan against PR #6 found one gap
+
+After a human applied this module and set `TFC_AWS_RUN_ROLE_ARN`, a real speculative plan was run against PR #6's `environments/lab` configuration. It got past OIDC/AssumeRole (proving that part of this module works end to end) and failed on exactly one `AccessDenied`:
+
+```
+Action:   iam:GetRole
+Resource: arn:aws:iam::<AWS_ACCOUNT_ID>:role/terraform-lab-role
+```
+
+Cause: `modules/eks` sets `enable_cluster_creator_admin_permissions = true`, which makes the upstream `terraform-aws-modules/eks/aws` module resolve the calling identity via the AWS provider's `aws_iam_session_context` data source — that data source calls `iam:GetRole` on the *assumed role's own name* to turn the STS session ARN back into a plain IAM role ARN for the EKS access entry it creates. This is `terraform-lab-role` reading its own metadata, not another role's.
+
+Fix: added a `SelfRoleLookup` statement, `iam:GetRole` scoped to `aws_iam_role.terraform_lab.arn` (a self-reference via Terraform's own resource address, not a hardcoded ARN — stays correct if `role_name` ever changes). Not yet re-verified against a real plan — that requires a human to re-apply this module (the policy change) and re-set `TFC_AWS_RUN_ROLE_ARN` if the role ARN itself changed (it won't — only the inline policy is being updated, not the role), then re-run PR #6's speculative plan.
+
 ## Recovery
 
 If the role or OIDC provider is accidentally deleted while `environments/lab` has real resources, nothing in AWS itself is affected (IAM changes don't touch EC2/EKS/etc. resources directly) — but HCP Terraform loses its ability to plan/apply/destroy those resources until the role is recreated and `TFC_AWS_RUN_ROLE_ARN` is updated again. Recreating this module's resources (same names, same trust policy) restores access without needing to touch the Lab resources themselves.
@@ -110,5 +123,5 @@ Parametrized for one workspace at a time (`hcp_workspace_name`). Reusing for a f
 
 ## Known limitations
 
-- Permissions policy is code-reviewed, not apply-tested. First real `terraform plan`/`apply` against this role should be watched closely for `AccessDenied` errors — if one occurs, the fix is to add the specific missing action to the relevant statement in `main.tf` (a small, reviewable diff), not to widen scope broadly "to be safe."
-- `Tasks 5 and 6 from this module's originating Plan are not done` — updating `TFC_AWS_RUN_ROLE_ARN` on the real workspace and re-confirming a successful `terraform plan` both require this module to actually be applied first, by a human with real AWS credentials. See "How a human applies this" above.
+- Apply-tested once (bootstrap apply + one real speculative plan on PR #6), which found and fixed the `SelfRoleLookup` gap above. The fix itself is not yet re-verified against a real plan — watch the next PR #6 run closely for further `AccessDenied` errors; if one occurs, add the specific missing action to the relevant statement in `main.tf` (a small, reviewable diff), not a broadened scope "to be safe."
+- Re-applying this module (to pick up the `SelfRoleLookup` fix) and re-running PR #6's speculative plan both require a human with real AWS credentials and HCP Terraform write access — see "How a human applies this" above.
