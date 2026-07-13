@@ -189,6 +189,22 @@ data "aws_iam_policy_document" "lab_permissions" {
     }
   }
 
+  # Gap found via a real speculative plan on PR #6 (Plan-1007): the
+  # upstream terraform-aws-modules/eks/aws module's
+  # enable_cluster_creator_admin_permissions=true (modules/eks/main.tf)
+  # resolves the calling identity through the AWS provider's own
+  # aws_iam_session_context data source, which calls iam:GetRole on the
+  # *assumed role's own name* to turn the STS session ARN back into an
+  # IAM role ARN. That's this role reading its own metadata, not
+  # touching any other role — scoped to its own resource address, never
+  # a wildcard or a hardcoded ARN.
+  statement {
+    sid       = "SelfRoleLookup"
+    effect    = "Allow"
+    actions   = ["iam:GetRole"]
+    resources = [aws_iam_role.terraform_lab.arn]
+  }
+
   # Gap found in Plan-1006 review (Task 4): the upstream
   # terraform-aws-modules/eks/aws module creates standalone managed
   # policies (e.g. the cluster encryption policy, when
