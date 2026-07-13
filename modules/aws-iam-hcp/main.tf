@@ -316,6 +316,21 @@ data "aws_iam_policy_document" "lab_permissions" {
     }
   }
 
+  # Gap found via a real apply (Plan: Finish EKS): EKS's own CreateNodegroup
+  # call checks whether AWSServiceRoleForAmazonEKSNodegroup already exists
+  # before deciding whether to create it — that check is a plain iam:GetRole,
+  # which doesn't support the iam:AWSServiceName condition key the statement
+  # above relies on (GetRole never emits that context key), so it needs its
+  # own statement rather than being folded into ServiceLinkedRoleCreation.
+  # Same resource scope, read-only.
+  statement {
+    sid     = "ServiceLinkedRoleLookup"
+    effect  = "Allow"
+    actions = ["iam:GetRole"]
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["arn:aws:iam::*:role/aws-service-role/*"]
+  }
+
   statement {
     sid    = "KMSForEKSSecretsEncryption"
     effect = "Allow"
