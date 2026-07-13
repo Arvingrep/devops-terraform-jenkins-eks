@@ -124,7 +124,24 @@ Resource: arn:aws:ssm:us-east-1::parameter/aws/service/eks/optimized-ami/1.35/am
 
 Cause: `modules/eks`'s managed node group (`modules/eks/main.tf`) sets `ami_type = "AL2023_ARM_64_STANDARD"` without pinning `ami_release_version`, so the upstream `terraform-aws-modules/eks/aws` module looks up the current recommended AMI release via AWS's own public SSM parameter namespace (`arn:aws:ssm:*::parameter/...` — no account ID, it's AWS-owned, not ours).
 
-Fix: added an `EKSOptimizedAMILookup` statement, `ssm:GetParameter` (read-only) scoped to `arn:aws:ssm:*::parameter/aws/service/eks/optimized-ami/*` — not all of SSM, just AWS's own published EKS-AMI namespace. Applied and re-verified — see Validation above for the current pass/fail state.
+Fix: added an `EKSOptimizedAMILookup` statement, `ssm:GetParameter` (read-only) scoped to `arn:aws:ssm:*::parameter/aws/service/eks/optimized-ami/*` — not all of SSM, just AWS's own published EKS-AMI namespace. Applied and re-verified: PR #6's speculative plan then succeeded cleanly (59 to add, 0 to change, 0 to destroy).
+
+## Plan-1009: a real (non-speculative) apply on PR #6 found one more gap
+
+After PR #6's plan verified clean and merged, a human confirmed and ran a real (non-speculative) apply against the `lab`-tracked workspace. It successfully created several IAM roles, the cluster-encryption policy, the CloudWatch log group, and the KMS key/alias — then errored while creating the VPC:
+
+```
+Error: creating EC2 VPC: modifying EnableDnsHostnames: waiting for completion:
+operation error EC2: DescribeVpcAttribute, ... AccessDenied ...
+Action:   ec2:DescribeVpcAttribute
+Resource: (VPC just created by this same apply)
+```
+
+Cause: the AWS provider's `aws_vpc` resource, after calling `ec2:ModifyVpcAttribute` to set DNS hostnames/support, polls with `ec2:DescribeVpcAttribute` (singular — describes one attribute of one VPC) to confirm the change landed before marking the resource complete. The existing `EC2Networking` statement had `ec2:DescribeVpcs` (plural — lists VPCs) and `ec2:ModifyVpcAttribute`, but not this distinct, similarly-named action.
+
+**Important**: the VPC itself *was* created and *is* correctly recorded in the workspace's Terraform state (confirmed via the state API before making any change here) — this was a permission gap partway through one resource's creation, not an orphaned/untracked resource. A retry apply, once this permission lands, resumes from where it left off rather than duplicating anything.
+
+Fix: added `ec2:DescribeVpcAttribute` to the existing `EC2Networking` statement's action list (same statement, same `resources=["*"]` justification as before — no new statement needed).
 
 ## Recovery
 
