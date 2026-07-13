@@ -5,10 +5,16 @@ locals {
   # not caller-configurable: they always win over anything passed in via
   # var.system_node_group.labels/taints so the pool can never silently
   # drift from the documented scheduling contract.
+  #
+  # kubernetes.io/arch is deliberately NOT set here: the EKS
+  # CreateNodegroup API rejects any label key under the reserved
+  # kubernetes.io/, k8s.io/, or eks.amazonaws.com/ prefixes (found via a
+  # real apply — InvalidParameterException). The kubelet sets this label
+  # itself on every node based on actual runtime architecture, so it was
+  # always redundant, not just invalid to set this way.
   system_required_labels = {
-    "workload-class"     = "system"
-    "node-lifecycle"     = "on-demand"
-    "kubernetes.io/arch" = var.system_node_group.architecture
+    "workload-class" = "system"
+    "node-lifecycle" = "on-demand"
   }
   system_labels = merge(var.system_node_group.labels, local.system_required_labels)
 
