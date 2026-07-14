@@ -18,6 +18,11 @@ variable "node_security_group_id" {
   description = "The EKS node group's shared security group ID (from modules/eks) — the only principal allowed to reach the EFS mount targets on port 2049."
 }
 
+variable "cluster_security_group_id" {
+  type        = string
+  description = "The EKS cluster's primary security group ID (from modules/eks) — Fargate pods (agents) use this, not node_security_group_id. Needs a DNS ingress rule on the node security group so Fargate agents can resolve in-cluster service names (CoreDNS runs on the node group)."
+}
+
 variable "cluster_name" {
   type        = string
   description = "EKS cluster name (from modules/eks) — the Fargate profile for Jenkins agents attaches to this cluster."

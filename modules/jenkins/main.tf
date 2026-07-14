@@ -93,6 +93,35 @@ resource "aws_security_group_rule" "efs_ingress_nfs" {
   description              = "NFS from the EKS node group"
 }
 
+# Found via a real Fargate agent pipeline run: the agent hung on
+# "UnknownHostException: jenkins.jenkins.svc.cluster.local" — Fargate pods
+# use the cluster's primary security group, not the node security group,
+# and the node security group's existing DNS rules only allow ingress from
+# itself ("node to node CoreDNS"), not from the cluster security group.
+# CoreDNS runs on the node group, so Fargate agents couldn't resolve any
+# in-cluster service name at all, including the one they need to connect
+# back to the controller. Two rules (TCP+UDP 53), scoped to exactly the
+# cluster security group as source — not modifying node-to-node DNS at all.
+resource "aws_security_group_rule" "node_dns_ingress_from_cluster_sg_tcp" {
+  type                     = "ingress"
+  security_group_id        = var.node_security_group_id
+  from_port                = 53
+  to_port                  = 53
+  protocol                 = "tcp"
+  source_security_group_id = var.cluster_security_group_id
+  description              = "CoreDNS (TCP) from Fargate pods (cluster security group)"
+}
+
+resource "aws_security_group_rule" "node_dns_ingress_from_cluster_sg_udp" {
+  type                     = "ingress"
+  security_group_id        = var.node_security_group_id
+  from_port                = 53
+  to_port                  = 53
+  protocol                 = "udp"
+  source_security_group_id = var.cluster_security_group_id
+  description              = "CoreDNS (UDP) from Fargate pods (cluster security group)"
+}
+
 # --- Jenkins agents: Fargate, not the Managed Node Group ----------------
 # Target architecture (AWS Lab OS v2 §3 / Plan: Complete AWS Lab): the
 # controller runs on the regular system node group (always up whenever the

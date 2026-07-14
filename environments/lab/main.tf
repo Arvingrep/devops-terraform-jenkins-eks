@@ -55,11 +55,12 @@ module "eks" {
 module "jenkins" {
   source = "../../modules/jenkins"
 
-  name_prefix            = local.name_prefix
-  vpc_id                 = module.network.vpc_id
-  private_subnet_ids     = module.network.private_subnet_ids
-  node_security_group_id = module.eks.node_security_group_id
-  cluster_name           = module.eks.cluster_name
+  name_prefix               = local.name_prefix
+  vpc_id                    = module.network.vpc_id
+  private_subnet_ids        = module.network.private_subnet_ids
+  node_security_group_id    = module.eks.node_security_group_id
+  cluster_security_group_id = module.eks.cluster_security_group_id
+  cluster_name              = module.eks.cluster_name
 }
 
 # StorageClass lives here, not in modules/eks: it's an in-cluster Kubernetes
