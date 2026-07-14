@@ -102,6 +102,11 @@ data "aws_iam_policy_document" "lab_permissions" {
       "ec2:DescribeAvailabilityZones", "ec2:DescribeAccountAttributes", "ec2:DescribeImages",
       "ec2:DescribeInstances", "ec2:DescribeInstanceTypes", "ec2:DescribeNetworkInterfaces", "ec2:DescribeVolumes",
       "ec2:RunInstances",
+      # EFS mount target creation (modules/jenkins) manages its own ENI in
+      # the target subnet, and ModifyNetworkInterfaceAttribute is needed
+      # because the mount target uses a caller-specified security group
+      # rather than the subnet/VPC default.
+      "ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:ModifyNetworkInterfaceAttribute",
     ]
     # EC2's API does not support resource-level ARN scoping for most of
     # these actions (create/describe operate account-wide) — this is a
@@ -319,7 +324,11 @@ data "aws_iam_policy_document" "lab_permissions" {
     condition {
       test     = "StringEquals"
       variable = "iam:AWSServiceName"
-      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com"]
+      # backup.amazonaws.com added for modules/jenkins's aws_efs_backup_policy
+      # (PutBackupPolicy AccessDenied on iam:CreateServiceLinkedRole — enabling
+      # EFS automatic backups auto-creates AWSServiceRoleForBackup on first use,
+      # same class of gap as the EKS/AutoScaling ones already here).
+      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com", "backup.amazonaws.com"]
     }
   }
 
