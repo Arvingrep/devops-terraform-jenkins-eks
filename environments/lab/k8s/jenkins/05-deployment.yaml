@@ -1,0 +1,132 @@
+# Controller runs on the regular system node group — same taint/toleration
+# pattern as every other system-pool workload in modules/eks — not on
+# Fargate (needs to always be up whenever the Lab is on, needs the EFS
+# PVC, and per AWS Lab OS v2 §3 the controller/agent split is deliberate).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # a second controller Pod must never run concurrently against the same jenkins_home
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      serviceAccountName: jenkins-controller
+      nodeSelector:
+        workload-class: system
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: system
+          effect: NoSchedule
+      securityContext:
+        fsGroup: 1000
+      # Found via a real deployment attempt: the official jenkins/jenkins
+      # image no longer auto-installs from a mounted
+      # /usr/share/jenkins/ref/plugins.txt (that mechanism was removed in
+      # a past image update) — it needs an explicit jenkins-plugin-cli
+      # invocation. Installs directly into the EFS-backed jenkins-home
+      # PVC (not an emptyDir) so plugins persist across restarts and the
+      # cli's own idempotency skips re-downloading already-installed ones.
+      initContainers:
+        - name: install-plugins
+          image: jenkins/jenkins:lts-jdk17
+          command:
+            - jenkins-plugin-cli
+            - --plugin-file
+            - /var/plugins_src/plugins.txt
+            - --plugin-download-directory
+            - /var/jenkins_home/plugins
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+            - name: plugins-src
+              mountPath: /var/plugins_src
+      containers:
+        - name: jenkins
+          image: jenkins/jenkins:lts-jdk17
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: agent
+              containerPort: 50000
+          env:
+            - name: CASC_JENKINS_CONFIG
+              value: /var/casc_configs/jenkins.yaml
+            - name: JENKINS_ADMIN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-admin-credentials
+                  key: username
+            - name: JENKINS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jenkins-admin-credentials
+                  key: password
+            - name: JAVA_OPTS
+              value: "-Djenkins.install.runSetupWizard=false"
+          volumeMounts:
+            - name: jenkins-home
+              mountPath: /var/jenkins_home
+            - name: casc-config
+              mountPath: /var/casc_configs
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /login
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 5
+      volumes:
+        - name: jenkins-home
+          persistentVolumeClaim:
+            claimName: jenkins-home-pvc
+        - name: casc-config
+          configMap:
+            name: jenkins-casc-config
+        - name: plugins-src
+          configMap:
+            name: jenkins-plugins
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  type: ClusterIP
+  selector:
+    app: jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: agent
+      port: 50000
+      targetPort: 50000

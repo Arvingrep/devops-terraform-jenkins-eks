@@ -1,0 +1,17 @@
+# Mounted at /usr/share/jenkins/ref/plugins.txt — the official jenkins/jenkins
+# image's entrypoint installs these on first boot (idempotent: once
+# installed, they live under JENKINS_HOME/plugins on the EFS-backed
+# volume and persist across restarts without re-downloading).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-plugins
+  namespace: jenkins
+data:
+  plugins.txt: |
+    configuration-as-code
+    kubernetes
+    workflow-aggregator
+    git
+    credentials-binding
+    matrix-auth

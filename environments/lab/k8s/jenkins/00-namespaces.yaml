@@ -1,0 +1,20 @@
+# Applied via kubectl directly, not Terraform — see
+# environments/lab/k8s/jenkins/README.md for why: HCP Terraform's remote
+# runners can't reliably reach this cluster's private-only API endpoint.
+#
+# Two namespaces, matching the target architecture (controller on the
+# regular node group, agents on Fargate):
+#   jenkins        — the controller Deployment, PV/PVC, Service
+#   jenkins-agents — nothing lives here permanently; the Fargate profile
+#                    (modules/jenkins) selects this namespace, and Jenkins's
+#                    own Kubernetes plugin creates/destroys agent Pods here
+#                    per build
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins-agents
