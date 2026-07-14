@@ -59,6 +59,7 @@ module "jenkins" {
   vpc_id                 = module.network.vpc_id
   private_subnet_ids     = module.network.private_subnet_ids
   node_security_group_id = module.eks.node_security_group_id
+  cluster_name           = module.eks.cluster_name
 }
 
 # StorageClass lives here, not in modules/eks: it's an in-cluster Kubernetes

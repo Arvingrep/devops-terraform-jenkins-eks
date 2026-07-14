@@ -130,6 +130,7 @@ data "aws_iam_policy_document" "lab_permissions" {
       "eks:DescribePodIdentityAssociation", "eks:ListPodIdentityAssociations", "eks:UpdatePodIdentityAssociation",
       "eks:CreateAccessEntry", "eks:DeleteAccessEntry", "eks:DescribeAccessEntry", "eks:ListAccessEntries",
       "eks:AssociateAccessPolicy", "eks:DisassociateAccessPolicy", "eks:ListAssociatedAccessPolicies",
+      "eks:CreateFargateProfile", "eks:DeleteFargateProfile", "eks:DescribeFargateProfile", "eks:ListFargateProfiles",
     ]
     # EKS resource-level permissions are inconsistent across this action
     # set in AWS's own reference (some support cluster-name-scoped ARNs,
@@ -226,7 +227,10 @@ data "aws_iam_policy_document" "lab_permissions" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com"]
+      # eks-fargate-pods.amazonaws.com added for modules/jenkins's Fargate
+      # execution role (Jenkins agents) — CreateFargateProfile needs
+      # iam:PassRole to that service principal, same pattern as the others.
+      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "eks-fargate-pods.amazonaws.com"]
     }
   }
 

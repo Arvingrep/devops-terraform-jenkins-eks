@@ -61,3 +61,46 @@ resource "aws_security_group_rule" "efs_ingress_nfs" {
   source_security_group_id = var.node_security_group_id
   description              = "NFS from the EKS node group"
 }
+
+# --- Jenkins agents: Fargate, not the Managed Node Group ----------------
+# Target architecture (AWS Lab OS v2 §3 / Plan: Complete AWS Lab): the
+# controller runs on the regular system node group (always up whenever the
+# Lab is on), agents run on Fargate — inherently ephemeral, no persistence
+# needed, no DaemonSet requirement, zero idle cost between builds. Only
+# Pods created in var.fargate_agent_namespace run here; the controller and
+# everything else stays on the node group.
+
+data "aws_iam_policy_document" "fargate_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["eks-fargate-pods.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "fargate_execution" {
+  name               = "${var.name_prefix}-jenkins-agents-fargate"
+  assume_role_policy = data.aws_iam_policy_document.fargate_assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "fargate_execution" {
+  role       = aws_iam_role.fargate_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy"
+}
+
+resource "aws_eks_fargate_profile" "jenkins_agents" {
+  cluster_name           = var.cluster_name
+  fargate_profile_name   = "${var.name_prefix}-jenkins-agents"
+  pod_execution_role_arn = aws_iam_role.fargate_execution.arn
+  subnet_ids             = var.private_subnet_ids
+
+  selector {
+    namespace = var.fargate_agent_namespace
+  }
+
+  tags = var.tags
+}

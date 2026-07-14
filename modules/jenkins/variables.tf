@@ -18,6 +18,17 @@ variable "node_security_group_id" {
   description = "The EKS node group's shared security group ID (from modules/eks) — the only principal allowed to reach the EFS mount targets on port 2049."
 }
 
+variable "cluster_name" {
+  type        = string
+  description = "EKS cluster name (from modules/eks) — the Fargate profile for Jenkins agents attaches to this cluster."
+}
+
+variable "fargate_agent_namespace" {
+  type        = string
+  description = "Kubernetes namespace the Fargate profile selects — only Pods created in this namespace run on Fargate. Jenkins dynamically provisions agent Pods here via the Kubernetes plugin; the controller itself runs on the regular EKS node group, not this namespace."
+  default     = "jenkins-agents"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Extra tags merged onto every resource this module creates."
