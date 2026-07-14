@@ -1,0 +1,166 @@
+# --- Jenkins Home: EFS, not EBS ----------------------------------------
+# Unlike ordinary Lab PVCs (gp3/EBS, reclaimPolicy=Delete — genuinely
+# ephemeral by design, see docs/eks-storage-design.md), Jenkins Home must
+# survive the Jenkins controller Pod being rescheduled to a different node
+# or AZ, and ideally survive a full Lab teardown/rebuild cycle. EBS volumes
+# are AZ-bound and single-attach; EFS is regional and can be mounted by a
+# freshly recreated cluster. AWS Lab OS v2 §3 covers the full reasoning.
+
+resource "aws_efs_file_system" "jenkins_home" {
+  creation_token = "${var.name_prefix}-jenkins-home"
+  encrypted      = true
+
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-jenkins-home"
+  })
+}
+
+# AWS Backup's built-in daily EFS backup — the actual backup/recovery
+# mechanism for Jenkins Home, not just a documentation note.
+resource "aws_efs_backup_policy" "jenkins_home" {
+  file_system_id = aws_efs_file_system.jenkins_home.id
+
+  backup_policy {
+    status = "ENABLED"
+  }
+}
+
+# Access point, not the raw filesystem: found via a real deployment
+# attempt — the Jenkins container runs as UID/GID 1000, and a raw EFS
+# root directory has no owner permitting that UID to write
+# ("touch: cannot touch '/var/jenkins_home/copy_reference_file.log':
+# Permission denied"). fsGroup in the Pod spec doesn't apply to EFS/NFS
+# the way it does to EBS. The access point's creation_info sets
+# ownership on the root directory the first time it's mounted, which is
+# the AWS-documented fix for exactly this case.
+resource "aws_efs_access_point" "jenkins_home" {
+  file_system_id = aws_efs_file_system.jenkins_home.id
+
+  posix_user {
+    uid = 1000
+    gid = 1000
+  }
+
+  root_directory {
+    path = "/jenkins-home"
+
+    creation_info {
+      owner_uid   = 1000
+      owner_gid   = 1000
+      permissions = "0755"
+    }
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-jenkins-home"
+  })
+}
+
+# One mount target per private subnet/AZ the node group can schedule into,
+# so every node has a local, same-AZ NFS mount point.
+resource "aws_efs_mount_target" "jenkins_home" {
+  for_each = toset(var.private_subnet_ids)
+
+  file_system_id  = aws_efs_file_system.jenkins_home.id
+  subnet_id       = each.value
+  security_groups = [aws_security_group.efs.id]
+}
+
+# Scoped to exactly the EKS node group's own security group as the only
+# allowed source — not a CIDR block, so this can't be reached from
+# anything else in the VPC, let alone the internet.
+resource "aws_security_group" "efs" {
+  name        = "${var.name_prefix}-jenkins-efs"
+  description = "Allows NFS (2049) from the EKS node group security group only."
+  vpc_id      = var.vpc_id
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-jenkins-efs"
+  })
+}
+
+resource "aws_security_group_rule" "efs_ingress_nfs" {
+  type                     = "ingress"
+  security_group_id        = aws_security_group.efs.id
+  from_port                = 2049
+  to_port                  = 2049
+  protocol                 = "tcp"
+  source_security_group_id = var.node_security_group_id
+  description              = "NFS from the EKS node group"
+}
+
+# Found via a real Fargate agent pipeline run: the agent hung on
+# "UnknownHostException: jenkins.jenkins.svc.cluster.local" — Fargate pods
+# use the cluster's primary security group, not the node security group,
+# and the node security group's existing DNS rules only allow ingress from
+# itself ("node to node CoreDNS"), not from the cluster security group.
+# CoreDNS runs on the node group, so Fargate agents couldn't resolve any
+# in-cluster service name at all, including the one they need to connect
+# back to the controller. Two rules (TCP+UDP 53), scoped to exactly the
+# cluster security group as source — not modifying node-to-node DNS at all.
+resource "aws_security_group_rule" "node_dns_ingress_from_cluster_sg_tcp" {
+  type                     = "ingress"
+  security_group_id        = var.node_security_group_id
+  from_port                = 53
+  to_port                  = 53
+  protocol                 = "tcp"
+  source_security_group_id = var.cluster_security_group_id
+  description              = "CoreDNS (TCP) from Fargate pods (cluster security group)"
+}
+
+resource "aws_security_group_rule" "node_dns_ingress_from_cluster_sg_udp" {
+  type                     = "ingress"
+  security_group_id        = var.node_security_group_id
+  from_port                = 53
+  to_port                  = 53
+  protocol                 = "udp"
+  source_security_group_id = var.cluster_security_group_id
+  description              = "CoreDNS (UDP) from Fargate pods (cluster security group)"
+}
+
+# --- Jenkins agents: Fargate, not the Managed Node Group ----------------
+# Target architecture (AWS Lab OS v2 §3 / Plan: Complete AWS Lab): the
+# controller runs on the regular system node group (always up whenever the
+# Lab is on), agents run on Fargate — inherently ephemeral, no persistence
+# needed, no DaemonSet requirement, zero idle cost between builds. Only
+# Pods created in var.fargate_agent_namespace run here; the controller and
+# everything else stays on the node group.
+
+data "aws_iam_policy_document" "fargate_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["eks-fargate-pods.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "fargate_execution" {
+  name               = "${var.name_prefix}-jenkins-agents-fargate"
+  assume_role_policy = data.aws_iam_policy_document.fargate_assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "fargate_execution" {
+  role       = aws_iam_role.fargate_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy"
+}
+
+resource "aws_eks_fargate_profile" "jenkins_agents" {
+  cluster_name           = var.cluster_name
+  fargate_profile_name   = "${var.name_prefix}-jenkins-agents"
+  pod_execution_role_arn = aws_iam_role.fargate_execution.arn
+  subnet_ids             = var.private_subnet_ids
+
+  selector {
+    namespace = var.fargate_agent_namespace
+  }
+
+  tags = var.tags
+}

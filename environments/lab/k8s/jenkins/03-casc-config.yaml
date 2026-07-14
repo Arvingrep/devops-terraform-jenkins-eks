@@ -1,0 +1,48 @@
+# Jenkins Configuration as Code (JCasC) — defines the Kubernetes Cloud
+# (Fargate agent template) and basic auth declaratively, so first boot
+# needs no manual UI configuration. Admin credentials come from the
+# jenkins-admin-credentials Secret (generated at apply time via kubectl,
+# see README.md — never committed) via JCasC's ${ENV_VAR} interpolation,
+# wired into the Deployment's env in 05-deployment.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-casc-config
+  namespace: jenkins
+data:
+  jenkins.yaml: |
+    jenkins:
+      systemMessage: "WCD AWS Lab Jenkins — modules/jenkins (Terraform) + environments/lab/k8s/jenkins (kubectl)"
+      numExecutors: 0
+      securityRealm:
+        local:
+          allowsSignup: false
+          users:
+            - id: "${JENKINS_ADMIN_ID}"
+              password: "${JENKINS_ADMIN_PASSWORD}"
+      authorizationStrategy:
+        loggedInUsersCanDoAnything:
+          allowAnonymousRead: false
+      clouds:
+        - kubernetes:
+            name: "fargate-agents"
+            namespace: "jenkins-agents"
+            serverUrl: "https://kubernetes.default.svc"
+            jenkinsUrl: "http://jenkins.jenkins.svc.cluster.local:8080"
+            jenkinsTunnel: "jenkins.jenkins.svc.cluster.local:50000"
+            containerCapStr: "10"
+            templates:
+              - name: "fargate-default"
+                namespace: "jenkins-agents"
+                label: "fargate"
+                idleMinutes: 5
+                podRetention: "never"
+                containers:
+                  - name: "jnlp"
+                    image: "jenkins/inbound-agent:3283.v92c105e0f819-1-jdk17"
+                    alwaysPullImage: false
+                    workingDir: "/home/jenkins/agent"
+                    resourceRequestCpu: "500m"
+                    resourceRequestMemory: "1Gi"
+                    resourceLimitCpu: "1"
+                    resourceLimitMemory: "2Gi"

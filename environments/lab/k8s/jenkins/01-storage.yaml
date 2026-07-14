@@ -1,0 +1,42 @@
+# Static provisioning against the real EFS filesystem created by
+# modules/jenkins (Terraform-managed, id verified live: fs-07ddb9ac8e0583791),
+# via an access point (fsap-05ed2841630ddbde5) — not the bare filesystem ID.
+# The access point's creation_info sets UID/GID 1000 ownership on the root
+# directory on first mount; the Jenkins container runs as that UID and a
+# raw EFS root directory has no owner permitting it to write (found via a
+# real deployment attempt: "Permission denied" on jenkins_home).
+#
+# reclaimPolicy=Retain is deliberate — deleting this PV/PVC must never
+# delete the EFS filesystem itself; that lifecycle belongs to Terraform,
+# not to whoever tears down a namespace. See docs/eks-storage-design.md
+# for why Retain (not the gp3/Delete Lab default) is correct here: Jenkins
+# Home is the one thing in this Lab that's supposed to survive teardown.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-home-pv
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  csi:
+    driver: efs.csi.aws.com
+    volumeHandle: "fs-07ddb9ac8e0583791::fsap-05ed2841630ddbde5"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home-pvc
+  namespace: jenkins
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 20Gi
+  volumeName: jenkins-home-pv

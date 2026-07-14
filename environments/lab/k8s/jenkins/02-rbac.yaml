@@ -1,0 +1,43 @@
+# Jenkins's Kubernetes plugin needs to create/watch/delete agent Pods in
+# jenkins-agents (the Fargate-selected namespace) on the controller's
+# behalf, and read logs from them. Scoped to exactly that one namespace,
+# exactly the object types/verbs the plugin actually calls — not
+# cluster-admin, not access to any other namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-controller
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-agent-manager
+  namespace: jenkins-agents
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent-manager-binding
+  namespace: jenkins-agents
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-controller
+    namespace: jenkins
+roleRef:
+  kind: Role
+  name: jenkins-agent-manager
+  apiGroup: rbac.authorization.k8s.io

@@ -89,7 +89,7 @@ data "aws_iam_policy_document" "lab_permissions" {
       "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway",
       "ec2:DetachInternetGateway", "ec2:DescribeInternetGateways",
       "ec2:CreateNatGateway", "ec2:DeleteNatGateway", "ec2:DescribeNatGateways",
-      "ec2:AllocateAddress", "ec2:ReleaseAddress", "ec2:DescribeAddresses", "ec2:DescribeAddressesAttribute",
+      "ec2:AllocateAddress", "ec2:ReleaseAddress", "ec2:DisassociateAddress", "ec2:DescribeAddresses", "ec2:DescribeAddressesAttribute",
       "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:ReplaceRoute",
       "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable", "ec2:DescribeRouteTables",
       "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules",
@@ -102,6 +102,11 @@ data "aws_iam_policy_document" "lab_permissions" {
       "ec2:DescribeAvailabilityZones", "ec2:DescribeAccountAttributes", "ec2:DescribeImages",
       "ec2:DescribeInstances", "ec2:DescribeInstanceTypes", "ec2:DescribeNetworkInterfaces", "ec2:DescribeVolumes",
       "ec2:RunInstances",
+      # EFS mount target creation (modules/jenkins) manages its own ENI in
+      # the target subnet, and ModifyNetworkInterfaceAttribute is needed
+      # because the mount target uses a caller-specified security group
+      # rather than the subnet/VPC default.
+      "ec2:CreateNetworkInterface", "ec2:DeleteNetworkInterface", "ec2:ModifyNetworkInterfaceAttribute",
     ]
     # EC2's API does not support resource-level ARN scoping for most of
     # these actions (create/describe operate account-wide) — this is a
@@ -125,6 +130,7 @@ data "aws_iam_policy_document" "lab_permissions" {
       "eks:DescribePodIdentityAssociation", "eks:ListPodIdentityAssociations", "eks:UpdatePodIdentityAssociation",
       "eks:CreateAccessEntry", "eks:DeleteAccessEntry", "eks:DescribeAccessEntry", "eks:ListAccessEntries",
       "eks:AssociateAccessPolicy", "eks:DisassociateAccessPolicy", "eks:ListAssociatedAccessPolicies",
+      "eks:CreateFargateProfile", "eks:DeleteFargateProfile", "eks:DescribeFargateProfile", "eks:ListFargateProfiles",
     ]
     # EKS resource-level permissions are inconsistent across this action
     # set in AWS's own reference (some support cluster-name-scoped ARNs,
@@ -221,7 +227,10 @@ data "aws_iam_policy_document" "lab_permissions" {
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com"]
+      # eks-fargate-pods.amazonaws.com added for modules/jenkins's Fargate
+      # execution role (Jenkins agents) — CreateFargateProfile needs
+      # iam:PassRole to that service principal, same pattern as the others.
+      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "ec2.amazonaws.com", "pods.eks.amazonaws.com", "eks-fargate-pods.amazonaws.com"]
     }
   }
 
@@ -319,7 +328,15 @@ data "aws_iam_policy_document" "lab_permissions" {
     condition {
       test     = "StringEquals"
       variable = "iam:AWSServiceName"
-      values   = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com"]
+      # backup.amazonaws.com added for modules/jenkins's aws_efs_backup_policy
+      # (PutBackupPolicy AccessDenied on iam:CreateServiceLinkedRole — enabling
+      # EFS automatic backups auto-creates AWSServiceRoleForBackup on first use,
+      # same class of gap as the EKS/AutoScaling ones already here).
+      #
+      # eks-fargate.amazonaws.com added for modules/jenkins's Fargate profile
+      # (CreateFargateProfile AccessDenied creating
+      # AWSServiceRoleForAmazonEKSForFargate on first use in the account).
+      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com", "backup.amazonaws.com", "eks-fargate.amazonaws.com"]
     }
   }
 
@@ -341,6 +358,30 @@ data "aws_iam_policy_document" "lab_permissions" {
     sid     = "ServiceLinkedRoleLookup"
     effect  = "Allow"
     actions = ["iam:GetRole"]
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["*"]
+  }
+
+  # Gap found via a real apply (Plan: Complete AWS Lab, Jenkins EFS
+  # infra): modules/jenkins creates an EFS filesystem, its backup policy,
+  # and mount targets for Jenkins Home — no elasticfilesystem:* actions
+  # existed anywhere in this policy before now. EFS doesn't support
+  # resource-level ARN scoping for CreateFileSystem/CreateMountTarget
+  # (the resource doesn't exist yet at call time), so this follows the
+  # same account-wide pattern as EC2Networking/EKS above, not a shortcut.
+  statement {
+    sid    = "EFSForJenkinsHome"
+    effect = "Allow"
+    actions = [
+      "elasticfilesystem:CreateFileSystem", "elasticfilesystem:DeleteFileSystem",
+      "elasticfilesystem:DescribeFileSystems", "elasticfilesystem:UpdateFileSystem",
+      "elasticfilesystem:TagResource", "elasticfilesystem:UntagResource", "elasticfilesystem:ListTagsForResource",
+      "elasticfilesystem:PutLifecycleConfiguration", "elasticfilesystem:DescribeLifecycleConfiguration",
+      "elasticfilesystem:PutBackupPolicy", "elasticfilesystem:DescribeBackupPolicy",
+      "elasticfilesystem:CreateMountTarget", "elasticfilesystem:DeleteMountTarget",
+      "elasticfilesystem:DescribeMountTargets", "elasticfilesystem:DescribeMountTargetSecurityGroups",
+      "elasticfilesystem:CreateAccessPoint", "elasticfilesystem:DeleteAccessPoint", "elasticfilesystem:DescribeAccessPoints",
+    ]
     # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = ["*"]
   }

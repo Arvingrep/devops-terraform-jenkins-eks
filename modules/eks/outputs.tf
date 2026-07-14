@@ -28,7 +28,17 @@ output "node_security_group_id" {
   description = "Security group ID shared by all managed node groups."
 }
 
+output "cluster_security_group_id" {
+  value       = module.eks.cluster_security_group_id
+  description = "The cluster's primary security group — Fargate pods use this (not node_security_group_id), since Fargate profiles don't accept a custom security group in this module's current config."
+}
+
 output "ebs_csi_pod_identity_role_arn" {
   value       = local.enable_ebs_csi ? aws_iam_role.ebs_csi[0].arn : null
   description = "IAM role ARN used by the EBS CSI driver via EKS Pod Identity, when aws-ebs-csi-driver is in var.cluster_addons."
+}
+
+output "efs_csi_pod_identity_role_arn" {
+  value       = local.enable_efs_csi ? aws_iam_role.efs_csi[0].arn : null
+  description = "IAM role ARN used by the EFS CSI driver via EKS Pod Identity, when aws-efs-csi-driver is in var.cluster_addons."
 }

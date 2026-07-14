@@ -1,0 +1,29 @@
+# Public access for jenkins.dfdfs.me (user-provided domain, DNS managed
+# outside this AWS account — no Route53 zone exists for it here, so the
+# CNAME must be created by whoever controls that domain's DNS, pointed at
+# whatever hostname this Service's LoadBalancer gets assigned).
+#
+# Separate from the internal ClusterIP "jenkins" Service (used by JCasC's
+# jenkinsUrl/jenkinsTunnel and the Kubernetes plugin) so a public endpoint
+# change never affects in-cluster agent connectivity.
+#
+# HTTP only for now, no TLS — flagged as a follow-up, not silently
+# skipped. Options: cert-manager + Let's Encrypt (needs an HTTP-01 or
+# DNS-01 solver reachable from outside), or migrate to an ALB Ingress +
+# ACM certificate (needs the AWS Load Balancer Controller installed,
+# which isn't yet).
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-public
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  type: LoadBalancer
+  selector:
+    app: jenkins
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
