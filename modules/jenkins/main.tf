@@ -29,6 +29,37 @@ resource "aws_efs_backup_policy" "jenkins_home" {
   }
 }
 
+# Access point, not the raw filesystem: found via a real deployment
+# attempt — the Jenkins container runs as UID/GID 1000, and a raw EFS
+# root directory has no owner permitting that UID to write
+# ("touch: cannot touch '/var/jenkins_home/copy_reference_file.log':
+# Permission denied"). fsGroup in the Pod spec doesn't apply to EFS/NFS
+# the way it does to EBS. The access point's creation_info sets
+# ownership on the root directory the first time it's mounted, which is
+# the AWS-documented fix for exactly this case.
+resource "aws_efs_access_point" "jenkins_home" {
+  file_system_id = aws_efs_file_system.jenkins_home.id
+
+  posix_user {
+    uid = 1000
+    gid = 1000
+  }
+
+  root_directory {
+    path = "/jenkins-home"
+
+    creation_info {
+      owner_uid   = 1000
+      owner_gid   = 1000
+      permissions = "0755"
+    }
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-jenkins-home"
+  })
+}
+
 # One mount target per private subnet/AZ the node group can schedule into,
 # so every node has a local, same-AZ NFS mount point.
 resource "aws_efs_mount_target" "jenkins_home" {

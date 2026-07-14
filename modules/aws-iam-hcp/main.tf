@@ -380,6 +380,7 @@ data "aws_iam_policy_document" "lab_permissions" {
       "elasticfilesystem:PutBackupPolicy", "elasticfilesystem:DescribeBackupPolicy",
       "elasticfilesystem:CreateMountTarget", "elasticfilesystem:DeleteMountTarget",
       "elasticfilesystem:DescribeMountTargets", "elasticfilesystem:DescribeMountTargetSecurityGroups",
+      "elasticfilesystem:CreateAccessPoint", "elasticfilesystem:DeleteAccessPoint", "elasticfilesystem:DescribeAccessPoints",
     ]
     # tfsec:ignore:aws-iam-no-policy-wildcards
     resources = ["*"]
