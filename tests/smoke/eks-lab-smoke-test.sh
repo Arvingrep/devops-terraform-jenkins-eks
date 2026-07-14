@@ -97,7 +97,7 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   nodeSelector:
-    dedicated: system
+    workload-class: system
   tolerations:
     - key: dedicated
       operator: Equal
