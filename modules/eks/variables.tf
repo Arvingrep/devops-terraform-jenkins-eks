@@ -71,14 +71,14 @@ variable "system_node_group" {
 
 variable "cluster_addons" {
   type        = list(string)
-  description = "EKS addons to enable. Limited to what this module actually wires up correctly (aws-ebs-csi-driver gets an EKS Pod Identity association; the others don't need one)."
+  description = "EKS addons to enable. Limited to what this module actually wires up correctly (aws-ebs-csi-driver and aws-efs-csi-driver each get an EKS Pod Identity association; the others don't need one)."
   default     = ["vpc-cni", "coredns", "kube-proxy", "aws-ebs-csi-driver"]
 
   validation {
     condition = alltrue([
-      for a in var.cluster_addons : contains(["vpc-cni", "coredns", "kube-proxy", "aws-ebs-csi-driver"], a)
+      for a in var.cluster_addons : contains(["vpc-cni", "coredns", "kube-proxy", "aws-ebs-csi-driver", "aws-efs-csi-driver"], a)
     ])
-    error_message = "cluster_addons may only contain \"vpc-cni\", \"coredns\", \"kube-proxy\", \"aws-ebs-csi-driver\" — this module doesn't wire up IAM/config for any other addon yet."
+    error_message = "cluster_addons may only contain \"vpc-cni\", \"coredns\", \"kube-proxy\", \"aws-ebs-csi-driver\", \"aws-efs-csi-driver\" — this module doesn't wire up IAM/config for any other addon yet."
   }
 }
 

@@ -39,6 +39,26 @@ module "eks" {
   public_access_cidrs   = var.eks_public_access_cidrs
 
   system_node_group = var.eks_system_node_group
+
+  # aws-efs-csi-driver added for Jenkins Home (module.jenkins below) — the
+  # module default only includes aws-ebs-csi-driver.
+  cluster_addons = ["vpc-cni", "coredns", "kube-proxy", "aws-ebs-csi-driver", "aws-efs-csi-driver"]
+}
+
+# Jenkins Home (EFS filesystem + mount targets + security group). The
+# Kubernetes-layer objects (namespace, PV/PVC, controller Deployment) are
+# NOT defined here — HCP Terraform's remote runners can't reach this
+# cluster's private-only API endpoint (confirmed via a real apply attempt:
+# "dial tcp ...: connect: network is unreachable"), so those are applied
+# directly via kubectl/Helm from an environment with real VPC access
+# instead. See modules/jenkins/README.md.
+module "jenkins" {
+  source = "../../modules/jenkins"
+
+  name_prefix            = local.name_prefix
+  vpc_id                 = module.network.vpc_id
+  private_subnet_ids     = module.network.private_subnet_ids
+  node_security_group_id = module.eks.node_security_group_id
 }
 
 # StorageClass lives here, not in modules/eks: it's an in-cluster Kubernetes

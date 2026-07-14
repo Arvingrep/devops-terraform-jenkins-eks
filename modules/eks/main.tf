@@ -28,6 +28,7 @@ locals {
   system_taints = merge(var.system_node_group.taints, local.system_required_taints)
 
   enable_ebs_csi = contains(var.cluster_addons, "aws-ebs-csi-driver")
+  enable_efs_csi = contains(var.cluster_addons, "aws-efs-csi-driver")
 
   # vpc-cni (aws-node) and kube-proxy ship as DaemonSets with a built-in
   # wildcard toleration (they're designed to run on every node regardless
@@ -58,11 +59,25 @@ locals {
     }
   })
 
+  # Same shape as the EBS CSI controller above — the EFS CSI driver's
+  # controller deployment needs the identical toleration override to
+  # schedule on this cluster's only (tainted) node group.
+  efs_csi_controller_tolerations_json = jsonencode({
+    controller = {
+      tolerations = [
+        { key = "CriticalAddonsOnly", operator = "Exists" },
+        { operator = "Exists", effect = "NoExecute", tolerationSeconds = 300 },
+        { key = "dedicated", operator = "Equal", value = "system", effect = "NoSchedule" },
+      ]
+    }
+  })
+
   addon_configuration_values = {
     vpc-cni            = null
     kube-proxy         = null
     coredns            = local.coredns_tolerations_json
     aws-ebs-csi-driver = local.ebs_csi_controller_tolerations_json
+    aws-efs-csi-driver = local.efs_csi_controller_tolerations_json
   }
 
   # EKS Pod Identity Agent isn't in var.cluster_addons because it isn't a
@@ -75,12 +90,19 @@ locals {
       most_recent          = true
       configuration_values = local.addon_configuration_values[name]
 
-      pod_identity_association = (name == "aws-ebs-csi-driver" && local.enable_ebs_csi) ? [{
-        role_arn        = aws_iam_role.ebs_csi[0].arn
-        service_account = "ebs-csi-controller-sa"
+      pod_identity_association = (
+        name == "aws-ebs-csi-driver" && local.enable_ebs_csi
+        ) ? [{
+          role_arn        = aws_iam_role.ebs_csi[0].arn
+          service_account = "ebs-csi-controller-sa"
+        }] : (
+        name == "aws-efs-csi-driver" && local.enable_efs_csi
+        ) ? [{
+          role_arn        = aws_iam_role.efs_csi[0].arn
+          service_account = "efs-csi-controller-sa"
       }] : null
     } },
-    local.enable_ebs_csi ? {
+    (local.enable_ebs_csi || local.enable_efs_csi) ? {
       "eks-pod-identity-agent" = {
         before_compute = true
         most_recent    = true
@@ -193,4 +215,36 @@ resource "aws_iam_role_policy_attachment" "ebs_csi" {
   count      = local.enable_ebs_csi ? 1 : 0
   role       = aws_iam_role.ebs_csi[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+# --- EFS CSI driver: EKS Pod Identity, same pattern as EBS CSI above ---
+# Least privilege: the AWS-managed AmazonEFSCSIDriverPolicy, nothing
+# broader. Used by modules/jenkins for the persistent Jenkins Home
+# filesystem — this module only wires up the driver itself, not any
+# specific EFS filesystem.
+
+data "aws_iam_policy_document" "efs_csi_assume" {
+  count = local.enable_efs_csi ? 1 : 0
+
+  statement {
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["pods.eks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "efs_csi" {
+  count              = local.enable_efs_csi ? 1 : 0
+  name               = "${var.cluster_name}-efs-csi-pod-identity"
+  assume_role_policy = data.aws_iam_policy_document.efs_csi_assume[0].json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "efs_csi" {
+  count      = local.enable_efs_csi ? 1 : 0
+  role       = aws_iam_role.efs_csi[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEFSCSIDriverPolicy"
 }

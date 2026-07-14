@@ -32,3 +32,8 @@ output "ebs_csi_pod_identity_role_arn" {
   value       = local.enable_ebs_csi ? aws_iam_role.ebs_csi[0].arn : null
   description = "IAM role ARN used by the EBS CSI driver via EKS Pod Identity, when aws-ebs-csi-driver is in var.cluster_addons."
 }
+
+output "efs_csi_pod_identity_role_arn" {
+  value       = local.enable_efs_csi ? aws_iam_role.efs_csi[0].arn : null
+  description = "IAM role ARN used by the EFS CSI driver via EKS Pod Identity, when aws-efs-csi-driver is in var.cluster_addons."
+}

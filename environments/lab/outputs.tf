@@ -28,5 +28,7 @@ output "eks_cluster_version" {
   description = "Kubernetes version running on the lab EKS cluster."
 }
 
-# Further outputs (jenkins) are added here as later Migration Plan phases
-# land — see docs/migration-plan.md.
+output "jenkins_efs_file_system_id" {
+  value       = module.jenkins.efs_file_system_id
+  description = "EFS filesystem ID for Jenkins Home — needed to statically provision the PersistentVolume via kubectl (see modules/jenkins/README.md)."
+}
