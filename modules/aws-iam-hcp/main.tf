@@ -332,7 +332,11 @@ data "aws_iam_policy_document" "lab_permissions" {
       # (PutBackupPolicy AccessDenied on iam:CreateServiceLinkedRole — enabling
       # EFS automatic backups auto-creates AWSServiceRoleForBackup on first use,
       # same class of gap as the EKS/AutoScaling ones already here).
-      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com", "backup.amazonaws.com"]
+      #
+      # eks-fargate.amazonaws.com added for modules/jenkins's Fargate profile
+      # (CreateFargateProfile AccessDenied creating
+      # AWSServiceRoleForAmazonEKSForFargate on first use in the account).
+      values = ["eks.amazonaws.com", "eks-nodegroup.amazonaws.com", "autoscaling.amazonaws.com", "backup.amazonaws.com", "eks-fargate.amazonaws.com"]
     }
   }
 
