@@ -345,6 +345,29 @@ data "aws_iam_policy_document" "lab_permissions" {
     resources = ["*"]
   }
 
+  # Gap found via a real apply (Plan: Complete AWS Lab, Jenkins EFS
+  # infra): modules/jenkins creates an EFS filesystem, its backup policy,
+  # and mount targets for Jenkins Home — no elasticfilesystem:* actions
+  # existed anywhere in this policy before now. EFS doesn't support
+  # resource-level ARN scoping for CreateFileSystem/CreateMountTarget
+  # (the resource doesn't exist yet at call time), so this follows the
+  # same account-wide pattern as EC2Networking/EKS above, not a shortcut.
+  statement {
+    sid    = "EFSForJenkinsHome"
+    effect = "Allow"
+    actions = [
+      "elasticfilesystem:CreateFileSystem", "elasticfilesystem:DeleteFileSystem",
+      "elasticfilesystem:DescribeFileSystems", "elasticfilesystem:UpdateFileSystem",
+      "elasticfilesystem:TagResource", "elasticfilesystem:UntagResource", "elasticfilesystem:ListTagsForResource",
+      "elasticfilesystem:PutLifecycleConfiguration", "elasticfilesystem:DescribeLifecycleConfiguration",
+      "elasticfilesystem:PutBackupPolicy", "elasticfilesystem:DescribeBackupPolicy",
+      "elasticfilesystem:CreateMountTarget", "elasticfilesystem:DeleteMountTarget",
+      "elasticfilesystem:DescribeMountTargets", "elasticfilesystem:DescribeMountTargetSecurityGroups",
+    ]
+    # tfsec:ignore:aws-iam-no-policy-wildcards
+    resources = ["*"]
+  }
+
   statement {
     sid    = "KMSForEKSSecretsEncryption"
     effect = "Allow"

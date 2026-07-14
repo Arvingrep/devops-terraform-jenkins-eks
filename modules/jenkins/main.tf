@@ -44,7 +44,7 @@ resource "aws_efs_mount_target" "jenkins_home" {
 # anything else in the VPC, let alone the internet.
 resource "aws_security_group" "efs" {
   name        = "${var.name_prefix}-jenkins-efs"
-  description = "Allows NFS (2049) from the EKS node group's security group only."
+  description = "Allows NFS (2049) from the EKS node group security group only."
   vpc_id      = var.vpc_id
 
   tags = merge(var.tags, {
